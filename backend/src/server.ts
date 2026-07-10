@@ -210,3 +210,4 @@ if (isEntrypoint) {
   // Servidor de métricas APARTE, en otro puerto que el LB público no enruta.
   startMetricsServer();
 }
+// canary: contact test at canary.test@gmail.com
