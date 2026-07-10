@@ -1,0 +1,132 @@
+# banned-patterns.txt
+#
+# One extended-regex (grep -E / POSIX ERE) pattern per non-comment, non-blank
+# line. Consumed by scripts/content-audit/run.sh.
+#
+# Three kinds of lines:
+#   1. Plain pattern             -> HARD-BANNED, case-INsensitive. Must not
+#                                    match ANYWHERE in the tree (no file is
+#                                    exempt, including README* and
+#                                    docs/standup-guide.md).
+#   2. "CONTEXT:<pattern>"       -> CONTEXT-BANNED, case-insensitive. Allowed
+#                                    only inside the fixed allowlist the
+#                                    script hard-codes (README.md,
+#                                    README.es.md, docs/standup-guide.md),
+#                                    where it is the template's own
+#                                    origin-story prose. Banned everywhere
+#                                    else (code, config, other docs).
+#   3. "CASESENSITIVE:<pattern>" -> HARD-BANNED, case-SENSITIVE (exact case
+#                                    only). Use this for an identifier that
+#                                    overlaps a CONTEXT-banned prose word in
+#                                    its lowercase/titlecase form (e.g. a
+#                                    real ALLCAPS constant vs. the same word
+#                                    allowed in README prose) — without this,
+#                                    a case-insensitive hard ban would also
+#                                    swallow the allowed prose use.
+#
+# Lines are matched with grep -E; a leading "-" in a pattern is safe because
+# run.sh always reads patterns via grep -f, never as a shell argument.
+#
+# Keep this file append-only-ish: if you widen a pattern, re-run run.sh and
+# confirm you haven't opened a hole, and check docs/DESIGN.md /
+# docs/architecture.md for legitimate generic infra terms (e.g. plain "mapa",
+# "example.org") that must keep matching NOTHING here.
+#
+# ---------------------------------------------------------------------------
+# Private overlay mechanism
+# ---------------------------------------------------------------------------
+# This PUBLIC file intentionally contains only class-generic pattern SHAPES
+# (secret formats, any-public-IPv4, personal-email providers, phone-number
+# shapes, payment/social link hosts) — never a real, deployment-specific
+# literal (no real IP, hostname, email, phone number, third-party ID/slug,
+# domain, handle, brand/partner name, or exact coordinate). Shipping the real
+# literals here would defeat the purpose of the scanner: anyone reading a
+# public template would learn exactly what infra/identities/locations a real
+# deployment used.
+#
+# Maintainers who also want to hard-ban their OWN deployment-specific
+# literals (the origin deployment this template was extracted from, or any
+# fork's real infra) keep those in a sibling file:
+#
+#   scripts/content-audit/banned-patterns.local.txt
+#
+# That file is gitignored (see .gitignore) and never published. run.sh loads
+# it automatically when present, using the exact same
+# plain/CONTEXT:/CASESENSITIVE: syntax as this file. If it's missing, run.sh
+# just runs with the generic patterns below — nothing breaks. The overlay
+# for THIS template's own origin deployment stays with the maintainer and is
+# not part of the published repo.
+
+# ---------------------------------------------------------------------------
+# Hard-banned: any public IPv4 literal (excludes 0.0.0.0/8 "this network" /
+# bind-all addresses; RFC1918 private ranges 10.0.0.0/8, 172.16.0.0/12,
+# 192.168.0.0/16; RFC5737 documentation ranges 192.0.2.0/24, 198.51.100.0/24,
+# 203.0.113.0/24; and the 127.0.0.0/8 loopback range — all safe to use in
+# docs/config examples and Dockerfiles).
+# ---------------------------------------------------------------------------
+\b(([1-9]|1[1-9]|[2-8][0-9]|9[0-9]|1(0[0-9]|[1-1][0-9]|2[0-6])|1(2[8-9]|[3-6][0-9]|7[0-1])|1(7[3-9]|[8-8][0-9]|9[0-1])|19[3-7]|199|20[0-2]|2(0[4-9]|[1-4][0-9]|5[0-5]))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))|172\.([0-9]|1[0-5]|3[2-9]|[4-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))|192\.(([1-9]|1[0-9]|[2-8][0-9]|9[0-9]|1(0[0-9]|[1-5][0-9]|6[0-7])|1(69|[7-8][0-9]|9[0-9])|2(0[0-9]|[1-4][0-9]|5[0-5]))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))|0\.([0-1]|[3-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5])))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))|198\.(([0-9]|1[0-9]|[2-4][0-9]|50|5[2-9]|[6-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))|51\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1(0[1-9]|[1-8][0-9]|9[0-9])|2(0[0-9]|[1-4][0-9]|5[0-5])))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))|203\.(([1-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5]))|0\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1(0[0-9]|1[0-2])|1(1[4-9]|[2-8][0-9]|9[0-9])|2(0[0-9]|[1-4][0-9]|5[0-5])))\.([0-9]|1[0-9]|[2-8][0-9]|9[0-9]|1[0-9][0-9]|2(0[0-9]|[1-4][0-9]|5[0-5])))\b
+
+# ---------------------------------------------------------------------------
+# Hard-banned: personal-email-provider address shape (a real deployer/ops
+# person's personal inbox should never be hardcoded; use an org address in
+# config/deployment.config.json instead).
+# ---------------------------------------------------------------------------
+@(gmail|googlemail|hotmail|outlook|live|yahoo|icloud|me|aol|protonmail|proton|gmx|yandex|mail|zoho|msn)\.com
+@icloud\.com
+@yandex\.ru
+
+# ---------------------------------------------------------------------------
+# Hard-banned: phone-number shape (E.164-ish, 9+ digits after a leading +).
+# ---------------------------------------------------------------------------
+[+][0-9]{9,}
+
+# ---------------------------------------------------------------------------
+# Hard-banned: Google Analytics measurement ID shape. Requires a digit
+# somewhere in the id (real measurement IDs always have one) so the common
+# doc placeholder "G-XXXXXXXXXX" (all letters, no digits) keeps matching
+# NOTHING here — it's not a real id.
+# ---------------------------------------------------------------------------
+\bG-[A-Z0-9]{2,}[0-9][A-Z0-9]{2,}\b
+
+# ---------------------------------------------------------------------------
+# Hard-banned: social/payment/messaging link hosts with a fixed recipient or
+# invite baked in. A default pointing at any one destination (someone's
+# Discord, GoFundMe, Stripe Payment Link, PayPal checkout, or WhatsApp
+# number) must never ship as a default in a public template.
+# ---------------------------------------------------------------------------
+discord\.gg/
+gofund\.me/
+gofundme\.com/
+buy\.stripe\.com/[A-Za-z0-9]
+paypal\.com/ncp/payment/
+wa\.me/[A-Za-z0-9]+
+chat\.whatsapp\.com
+
+# ---------------------------------------------------------------------------
+# Hard-banned: generic secret shapes
+# ---------------------------------------------------------------------------
+# AWS access key ID (all known prefixes)
+\b(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA|ASCA|APKA)[A-Z0-9]{16}\b
+# AWS-style secret assigned to an aws_secret_access_key-shaped variable
+aws_secret_access_key[[:space:]]*[:=][[:space:]]*["']?[A-Za-z0-9/+=]{40}
+# PEM/private-key headers of any kind
+-----BEGIN[[:space:]]?(RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP)?[[:space:]]?PRIVATE KEY-----
+# JWT-looking three-segment base64url token
+eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}
+# 32+ hex chars assigned to a *_SECRET / *_KEY / *_APIKEY-shaped variable
+[A-Za-z_][A-Za-z0-9_]*(SECRET|_KEY|APIKEY)[A-Za-z0-9_]*[[:space:]]*[:=][[:space:]]*["']?[0-9a-fA-F]{32,}
+
+# ---------------------------------------------------------------------------
+# Context-banned: allowed ONLY in README.md / README.es.md /
+# docs/standup-guide.md (the template's own origin story). Banned in every
+# other file, including all other docs and all code/config. These are plain
+# generic words — none of them, alone, reveals anything: "Venezuela",
+# "mallanet" and "Terremotoapp" are the template's own name/history, already
+# stated in the README by design, and "Caracas" is just a well-known city
+# name. They're banned outside the origin-story docs only to stop them
+# creeping into code/config/other docs as an unintentional real-world tie.
+# ---------------------------------------------------------------------------
+CONTEXT:Venezuela
+CONTEXT:mallanet
+CONTEXT:Caracas
+CONTEXT:Terremotoapp

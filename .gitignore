@@ -1,0 +1,23 @@
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+# docker-compose.prod.yml's own real secrets file (see its header comment);
+# doesn't match `.env.*` above since it's a *.env file, not a dotfile-of-env.
+.prod.env
+*.prod.env
+*.log
+.DS_Store
+noseyparker-report*
+gitleaks-report*
+# Maintainer-private overlay for the content-audit scanner (real,
+# deployment-specific literals). See scripts/content-audit/banned-patterns.txt
+# for the overlay mechanism.
+scripts/content-audit/banned-patterns.local.txt
+
+# Los skills .claude/ SON parte de la plantilla (algunos entornos los ignoran globalmente)
+!.claude/

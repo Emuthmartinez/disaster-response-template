@@ -1,0 +1,16 @@
+{
+  "orgName": "Organización Ejemplo",
+  "productName": "Mapa de Emergencia",
+  "disasterName": "Sismo Ejemplo 2026",
+  "disasterType": "earthquake",
+  "regionLabel": "Región Ejemplo",
+  "mapCenter": [19.4326, -99.1332],
+  "mapZoom": 12,
+  "languageTag": "es",
+  "contactEmail": "contacto@example.org",
+  "domains": {
+    "web": "mapa.example.org",
+    "api": "api.mapa.example.org",
+    "admin": "admin.mapa.example.org"
+  }
+}

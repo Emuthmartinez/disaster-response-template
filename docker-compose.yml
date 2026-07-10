@@ -1,0 +1,207 @@
+# Entorno LOCAL completo de la arquitectura v2: frontend (Next) + backend
+# (Express) + Postgres + Valkey, reflejando prod (tier web + tier api separados).
+#
+#   docker compose up --build -d     # frontend :3000, backend :8080, db :5432
+#   docker compose logs -f backend
+#   docker compose down              # parar (CONSERVA los datos del volumen)
+#   docker compose down -v           # parar + BORRAR datos
+#
+# Los datos viven en el volumen `postgres_data` y persisten entre up/down;
+# solo `down -v` los borra. Nunca cargues un dump con datos reales de personas
+# en este volumen local (ver AGENTS.md, política de no-datos-reales).
+#
+# El servicio one-shot `migrate-seed` aplica migraciones y siembra datos DEMO
+# (SOLO local) antes de que arranque el backend. Es idempotente y se niega a
+# correr si detecta datos NO-demo (no mezcla fixtures con un dump real).
+#
+# Wiring API (como en prod): el frontend llama al backend por URL ABSOLUTA
+# (NEXT_PUBLIC_API_URL). El browser corre fuera de la red de Docker, así que la
+# URL es http://localhost:8080 (NO el nombre de servicio). NEXT_PUBLIC_* se
+# inlinea en build → va como build-arg. El backend habilita CORS para :3000.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: mapa_app
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mapa_app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # PgBouncer LOCAL para probar el pooler antes de sumarlo a producción.
+  # Opt-in por profile: `docker compose --profile pgbouncer up --build`.
+  # Sin el profile no arranca y el backend va directo a `db` como siempre.
+  # Modo transacción, mismas credenciales que la app.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p3
+    profiles: ["pgbouncer"]
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: mapa_app
+      DB_PASSWORD: localdev
+      DB_NAME: app
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "25"
+      AUTH_TYPE: scram-sha-256
+    ports:
+      - "6432:6432"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U mapa_app || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Job one-shot: aplica migraciones + seed (capacidades, rol admin, superadmin)
+  # ANTES de que el backend arranque. Espeja el servicio `migrate` gateado de
+  # docker-compose.prod.yml. Luego siembra datos DEMO locales (salvo
+  # SKIP_SEED=1). Corre y termina (restart: no); el backend depende de que
+  # complete con éxito.
+  migrate-seed:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: sh -c 'npm run migrate && { [ "$$SKIP_SEED" = "1" ] && echo "[seed] omitido (SKIP_SEED=1)" || npm run seed; }'
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://mapa_app:localdev@db:5432/app
+      MIGRATIONS_DIR: ../infra/db/migrations
+      JWT_SECRET: local-dev-jwt-secret-not-for-prod-0123456789
+      SEED_ADMIN_EMAIL: "${SEED_ADMIN_EMAIL:-admin@example.org}"
+      SEED_ADMIN_PASSWORD: localadminpass123
+      SKIP_SEED: "${SKIP_SEED:-0}"
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      # Stack LOCAL → development: relaja los fail-fast de prod (JWT_SECRET largo,
+      # COOKIE_SECURE) que aplican solo con NODE_ENV=production. La imagen fija
+      # production por defecto; aquí lo sobreescribimos para el entorno local.
+      NODE_ENV: development
+      PORT: "8080"
+      # Por defecto va directo a `db`. Para probar el pooler, levanta con el
+      # profile pgbouncer Y exporta DB_TARGET=pgbouncer:6432, p.ej.:
+      #   DB_TARGET=pgbouncer:6432 docker compose --profile pgbouncer up --build
+      # (el migrate-seed SIEMPRE va directo a db:5432 — carve-out, igual que prod.)
+      DATABASE_URL: postgres://mapa_app:localdev@${DB_TARGET:-db:5432}/app
+      VALKEY_URL: redis://valkey:6379
+      # CORS: el frontend (browser en localhost:3000) llama cross-origin al backend.
+      CORS_ORIGINS: http://localhost:3000
+      TRUSTED_IP_HEADER: "" # dev: cae a req.ip
+      IP_SALT: localdev-salt
+      PATIENT_DOCUMENT_HASH_SECRET: local-dev-patient-document-hash-secret-0123456789
+      ADMIN_PASSWORD: localadmin
+      # Turnstile DESACTIVADO en local (sin secret → requireHuman deja pasar).
+      # --- Auth api/public/* (JWT cookie + Bearer) ---
+      JWT_SECRET: local-dev-jwt-secret-not-for-prod-0123456789
+      COOKIE_SECURE: "false" # http local; en prod va a true (validado por env)
+      # Base para los links de invitación/reset. Es el PANEL admin (ahí aterriza
+      # quien acepta una invitación), no el sitio público. Local: :3001; en prod
+      # pon ADMIN_BASE_URL=https://admin.example.org en tu .env.
+      APP_BASE_URL: "${ADMIN_BASE_URL:-http://localhost:3001}"
+      # SMTP: se interpola desde .env (de la raíz). Sin .env quedan vacíos y el
+      # backend cae a modo dev (el invite devuelve el link; el OTP se loguea).
+      # Pon los SMTP_* reales en .env para enviar correos localmente.
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-Mapa de Emergencia <noreply@example.org>}"
+      # OCR/ICR (Minimax VL) DESACTIVADO en local si MINIMAX_API_KEY no existe.
+      # Docker Compose lee .env para interpolar estas variables, pero no las inyecta
+      # automáticamente al contenedor si no están listadas aquí.
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_OCR_BASE_URL: ${MINIMAX_OCR_BASE_URL:-https://api.minimax.io/v1}
+      MINIMAX_OCR_MODEL: ${MINIMAX_OCR_MODEL:-MiniMax-M3}
+      MINIMAX_OCR_MAX_TOKENS: ${MINIMAX_OCR_MAX_TOKENS:-2048}
+      MINIMAX_OCR_TIMEOUT_MS: ${MINIMAX_OCR_TIMEOUT_MS:-30000}
+      MINIMAX_OCR_PROMPT: ${MINIMAX_OCR_PROMPT:-}
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate-seed:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # URL absoluta del backend para el BROWSER (no la red de Docker).
+        NEXT_PUBLIC_API_URL: "http://localhost:8080"
+        NEXT_PUBLIC_ACOPIO_DEFAULT_COUNTRY: "${NEXT_PUBLIC_ACOPIO_DEFAULT_COUNTRY:-Example Country}"
+        # Base pública del CDN de fotos (no sensible). Vacío en local: las
+        # fotos se sirven desde el propio backend.
+        NEXT_PUBLIC_R2_PUBLIC_BASE: "${NEXT_PUBLIC_R2_PUBLIC_BASE:-}"
+    environment:
+      # SSR / Server Components dentro de Docker llaman al backend por la RED
+      # interna (nombre de servicio), NO localhost. Sin esto, server-api.ts cae a
+      # localhost:8080 dentro del contenedor frontend y el fetch SSR (p.ej.
+      # /hospitales/[id], sitemap) falla con ECONNREFUSED.
+      INTERNAL_API_URL: http://backend:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  # Panel de administración (rescatistas) — microservicio Next standalone aparte
+  # del sitio público. En prod va en admin.example.org detrás del mismo Caddy;
+  # aquí corre en :3001. Habla con el backend SOLO server-side (su BFF) por la
+  # red interna; el navegador llama same-origin al BFF del admin.
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # El BFF del admin llama al backend por la red interna de Docker.
+      EMERGENCY_API_URL: http://backend:8080
+      # Cookie de sesión httpOnly. En local (http) NO puede ser Secure o el
+      # navegador la descarta; en prod (https) va a true. Espeja el backend.
+      COOKIE_SECURE: "false"
+      # TTL de la cookie de sesión del BFF (seg). Espeja JWT_TTL_SECONDS.
+      SESSION_MAX_AGE_SECONDS: "43200"
+    ports:
+      - "3001:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  valkey_data:

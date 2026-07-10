@@ -1,0 +1,197 @@
+# Entorno de PRODUCCIÓN en un único VPS (docker compose + Caddy). Pensado para
+# el perfil "un solo box": Postgres y Valkey co-ubicados en el mismo host que
+# la app. Copia `.env.example` a `.prod.env`, rellena los valores reales y usa:
+#
+#   docker compose -f docker-compose.prod.yml --env-file .prod.env up -d --build
+#   docker compose -f docker-compose.prod.yml --env-file .prod.env logs -f backend
+#   docker compose -f docker-compose.prod.yml --env-file .prod.env down
+#
+# Notas:
+#   - Postgres/Valkey van co-ubicados por defecto (servicios `db`/`valkey`). Si
+#     prefieres una base externa, apunta DATABASE_URL/VALKEY_URL a esa
+#     instancia y quita los servicios `db`/`valkey` de este archivo.
+#   - Cabeceras de seguridad en Caddy (ver Caddyfile.example) alineadas con
+#     helmet/Next headers del resto de servicios.
+#   - Dominios productivos: variables WEB_DOMAIN / API_DOMAIN / ADMIN_DOMAIN
+#     (ver .env.example) — Caddyfile.example los lee como {$WEB_DOMAIN} etc.
+#   - Todos los servicios de app (backend/worker/frontend/admin/caddy):
+#     security_opt no-new-privileges + cap_drop ALL. db/valkey/migrate solo
+#     llevan no-new-privileges (las imágenes oficiales de postgres/valkey
+#     necesitan caps extra en su init; no se les añadió cap_drop).
+#
+# DNS requerido (apuntar al VPS de producción), uno por cada dominio elegido:
+#   ${WEB_DOMAIN}    -> frontend
+#   ${API_DOMAIN}    -> backend
+#   ${ADMIN_DOMAIN}  -> admin
+
+services:
+  # Postgres co-ubicado en el mismo VPS (perfil "un solo box"). Solo accesible
+  # dentro de mapa_prod_net; no publica puertos al host. DATABASE_URL en
+  # .prod.env debe apuntar a `db:5432`.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks: [mapa_prod_net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    # Forma shell (no exec-form array): expande $$VALKEY_PASSWORD en RUNTIME
+    # dentro del contenedor, así el valor real nunca queda en el argv que
+    # `docker inspect`/`ps`/`/proc/<pid>/cmdline` exponen a cualquiera con
+    # acceso al host/Docker — a diferencia de una interpolación
+    # `${VALKEY_PASSWORD}` de compose, que sí quedaría fija y visible ahí.
+    command: >-
+      sh -c 'exec valkey-server --appendonly yes --requirepass "$$VALKEY_PASSWORD"'
+    env_file: .prod.env
+    volumes:
+      - valkey_data:/data
+    networks: [mapa_prod_net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "$${VALKEY_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["npm", "--prefix", "/app/backend", "run", "migrate"]
+    # Migraciones copiadas a /app/infra/db/migrations (hermano de backend). Con
+    # cwd=/app/backend el MIGRATIONS_DIR relativo iría a /app/backend/infra/db/
+    # migrations (inexistente) → "Can't find meta/_journal.json". Ruta absoluta.
+    environment:
+      MIGRATIONS_DIR: /app/infra/db/migrations
+    env_file: .prod.env
+    restart: "no"
+    networks: [mapa_prod_net]
+    depends_on:
+      db:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: .prod.env
+    networks: [mapa_prod_net]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["npx", "tsx", "worker/index.ts"]
+    env_file: .prod.env
+    networks: [mapa_prod_net]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_R2_PUBLIC_BASE: ${NEXT_PUBLIC_R2_PUBLIC_BASE}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
+    environment:
+      INTERNAL_API_URL: http://backend:8080
+    networks: [mapa_prod_net]
+    restart: unless-stopped
+    depends_on:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    env_file: .prod.env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      EMERGENCY_API_URL: http://backend:8080
+    networks: [mapa_prod_net]
+    restart: unless-stopped
+    depends_on:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  # TLS termina aquí. Perfil "un solo box": Caddy publica :80/:443 directo en
+  # el host (HTTP-01/ALPN de Let's Encrypt necesita responder ahí). Sin
+  # ningún edge/proxy externo delante — ver backend/src/lib/client-ip.ts y
+  # TRUSTED_IP_HEADER en .env.example si en tu topología SÍ hay uno.
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy.prod
+    env_file: .prod.env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [mapa_prod_net]
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+      - admin
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - NET_BIND_SERVICE
+    cap_drop: ["ALL"]
+
+networks:
+  mapa_prod_net:
+    driver: bridge
+
+volumes:
+  pg_data:
+  valkey_data:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,28 @@
+<svg viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#102a43" />
+      <stop offset="45%" stop-color="#183b56" />
+      <stop offset="100%" stop-color="#1e40af" />
+    </linearGradient>
+    <radialGradient id="glow" cx="18%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="#2b51f0" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#2b51f0" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)" />
+  <rect width="1200" height="630" fill="url(#glow)" />
+  <!-- Abstract concentric rings (signal / radar motif) -->
+  <circle cx="600" cy="300" r="220" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2" />
+  <circle cx="600" cy="300" r="150" fill="none" stroke="#ffffff" stroke-opacity="0.1" stroke-width="2" />
+  <circle cx="600" cy="300" r="80" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="2" />
+  <!-- Map pin -->
+  <g transform="translate(600,300)">
+    <path
+      d="M0,-92 C48,-92 86,-55 86,-8 C86,52 0,132 0,132 C0,132 -86,52 -86,-8 C-86,-55 -48,-92 0,-92 Z"
+      fill="#ffffff"
+      fill-opacity="0.95"
+    />
+    <circle cx="0" cy="-8" r="34" fill="#2b51f0" />
+  </g>
+</svg>

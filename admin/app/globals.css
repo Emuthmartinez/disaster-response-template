@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+/*
+ * Tailwind v4 escanea desde app/globals.css; @source explícito garantiza que las
+ * clases de los atoms en src/ui (bg-blue-600, rounded-md, …) se generen siempre,
+ * aunque cambie la heurística de auto-detección.
+ */
+@source "../src/**/*.{ts,tsx}";

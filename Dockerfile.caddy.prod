@@ -1,0 +1,14 @@
+FROM caddy:2-alpine
+
+# Caddyfile horneado en la imagen (NO bind-mount): en muchos runners de CI el
+# build corre containerizado, así que las rutas del workspace del runner no
+# existen en el host del daemon de Docker — un bind-mount de archivo hace que
+# el daemon autocree un DIRECTORIO en el host y el montaje sobre
+# /etc/caddy/Caddyfile revienta ("mount a directory onto a file"). Copiar el
+# archivo a build time evita ese problema por completo.
+#
+# Caddyfile.example ya usa placeholders {$WEB_DOMAIN}/{$API_DOMAIN}/
+# {$ADMIN_DOMAIN}/{$ACME_EMAIL} (ver ese archivo y .env.example), así que no
+# hace falta un Caddyfile separado por entorno: basta con pasar `env_file:
+# .prod.env` al servicio `caddy` en docker-compose.prod.yml.
+COPY Caddyfile.example /etc/caddy/Caddyfile

@@ -1,0 +1,42 @@
+{
+  "_note": "EXAMPLE values matching config/deployment.config.json. This is a static file served as-is by Next.js — it is NOT generated from the config at build time. The disaster-configure tooling (or a manual edit) rewrites name/short_name/description/lang/icons for a real deployment.",
+  "name": "Mapa de Emergencia · Organización Ejemplo",
+  "short_name": "Mapa de Emergencia",
+  "description": "Reporte ciudadano en tiempo real para coordinar rescates, identificar daños y organizar ayuda humanitaria durante una emergencia.",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f8fafc",
+  "theme_color": "#0ea5e9",
+  "categories": ["utilities", "social", "news"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Reportar",
+      "short_name": "Reportar",
+      "url": "/#mapa",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Personas desaparecidas",
+      "short_name": "Desaparecidas",
+      "url": "/#e-directory",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Teléfonos de emergencia",
+      "short_name": "Teléfonos",
+      "url": "/#telefonos",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
+  ]
+}

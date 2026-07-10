@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    // tsx ejecuta el worker como ESM. bundler resuelve sin exigir extensiones
+    // .js y respeta el alias "@/*" -> ../src/*, IGUAL que el tsconfig raíz
+    // (paths "@/*": ["./src/*"]), para que el código compartido de src/ resuelva
+    // sus propios imports "@/..." al compilar/ejecutar desde el worker.
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@/*": ["../src/*"],
+      // Igual que el tsconfig raíz: el esquema vive en ../../infra/db (fuera del
+      // root del backend) y bundler no sube a backend/node_modules para resolver
+      // drizzle-orm desde ahí. Anclamos los imports a backend/node_modules.
+      "drizzle-orm": ["../node_modules/drizzle-orm"],
+      "drizzle-orm/*": ["../node_modules/drizzle-orm/*"]
+    }
+  },
+  "include": ["**/*.ts"]
+}
