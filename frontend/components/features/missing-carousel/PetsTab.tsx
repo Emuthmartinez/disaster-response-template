@@ -33,6 +33,7 @@ import { useLowBandwidthMode } from "@/hooks/useLowBandwidthMode";
 import { useDirectoryHeaderStats } from "@/hooks/useDirectoryHeaderStats";
 import { Pagination } from "@/components/ui/Pagination";
 import { SectionLoading } from "@/components/ui/SectionLoading";
+import { StaleDataNotice } from "@/components/ui/StaleDataNotice";
 import { PetCard } from "./PetCard";
 import { ZoneFilters, type PersonStatusFilter } from "./ZoneFilters";
 
@@ -195,6 +196,7 @@ export const PetsTab = forwardRef<PetsTabHandle>(function PetsTab(_props, ref) {
         <p className="e-m-section__sub">
           Si reconoces a alguna, contacta a quien la reportó.
         </p>
+        <StaleDataNotice staleAt={stats.data?.swStaleAt} />
       </div>
 
       <ZoneFilters filter={filter} onChange={setFilter} />

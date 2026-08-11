@@ -19,20 +19,9 @@ import { useLowBandwidthMode } from "@/hooks/useLowBandwidthMode";
 import { useDirectoryHeaderStats } from "@/hooks/useDirectoryHeaderStats";
 import { Pagination } from "@/components/ui/Pagination";
 import { SectionLoading } from "@/components/ui/SectionLoading";
+import { StaleDataNotice } from "@/components/ui/StaleDataNotice";
 import { MissingPersonCard } from "./MissingPersonCard";
 import { ZoneFilters, type PersonStatusFilter } from "./ZoneFilters";
-
-/**
- * "hace X" corto para el aviso de datos guardados (respaldo del SW): minutos
- * si es reciente, horas o días después. Sin dependencias nuevas (YAGNI).
- */
-function formatAgo(epochMs: number): string {
-  const mins = Math.max(1, Math.round((Date.now() - epochMs) / 60_000));
-  if (mins < 60) return `${mins} min`;
-  const hours = Math.round(mins / 60);
-  if (hours < 48) return `${hours} h`;
-  return `${Math.round(hours / 24)} días`;
-}
 
 const DetailModal = dynamic(
   () => import("@/components/features/missing/MissingPersonDetail"),
@@ -191,17 +180,7 @@ export const PersonsTab = forwardRef<PersonsTabHandle>(function PersonsTab(
         <p className="e-m-section__sub">
           Si reconoces a alguien, contacta a quien la reportó.
         </p>
-        {stats.data?.swStaleAt !== undefined && (
-          // El SW sirvió RESPALDO cacheado (servidor lento o sin conexión):
-          // decirlo es obligatorio — números congelados de hace horas/días
-          // presentados como actuales son un dato falso en un directorio de
-          // personas desaparecidas. Se actualiza solo (poll de 60 s +
-          // revalidación en segundo plano del SW).
-          <p role="status" className="e-m-section__sub" style={{ color: "#92400e" }}>
-            ⚠️ Mostrando datos guardados de hace {formatAgo(stats.data.swStaleAt)} — sin
-            conexión estable con el servidor. Se actualizarán automáticamente.
-          </p>
-        )}
+        <StaleDataNotice staleAt={stats.data?.swStaleAt} />
       </div>
 
       <ZoneFilters filter={filter} onChange={setFilter} />

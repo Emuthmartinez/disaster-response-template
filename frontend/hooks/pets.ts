@@ -92,7 +92,17 @@ export function usePetStats(pollMs = 60_000) {
   return useQuery({
     queryKey: qk.pets.stats,
     queryFn: ({ signal }) =>
-      apiGet<{ stats: PetStats }>("/api/pets/stats", signal).then((r) => r.stats),
+      apiGet<{ stats: PetStats; __swStaleAt?: number }>(
+        "/api/pets/stats",
+        signal,
+      ).then((r) => ({
+        ...r.stats,
+        // Mismo contrato que useMissingStats: el service worker inyecta
+        // __swStaleAt cuando sirve RESPALDO cacheado (backend inalcanzable o
+        // lento) — epoch-ms de cuándo se cacheó. La UI lo usa para avisar que
+        // los números no son actuales (StaleDataNotice).
+        swStaleAt: r.__swStaleAt,
+      })),
     refetchInterval: pollMs,
   });
 }
