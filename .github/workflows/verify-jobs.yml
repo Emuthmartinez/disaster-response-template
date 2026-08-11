@@ -42,7 +42,13 @@ jobs:
 
       - name: Instalar dependencias (solo pg, para el conteo de dead-letters)
         working-directory: backend
-        run: npm ci --omit=dev --ignore-scripts
+        # npm ci COMPLETO, sin --omit=dev: con --omit=dev, el npm del runner
+        # puede validar mal copias anidadas de una dependencia cuya copia
+        # top-level es solo-dev y abortar con "Missing: <pkg> from lock
+        # file" aunque el lockfile esté perfectamente en sync (visto en el
+        # despliegue de Colombia con yaml@2.9.0 bajo openapi3-ts). Instalar
+        # devDeps de más es más barato que un nocturno en rojo falso.
+        run: npm ci --ignore-scripts
 
       - name: verify-jobs staging
         env:
@@ -65,7 +71,13 @@ jobs:
 
       - name: Instalar dependencias (solo pg, para el conteo de dead-letters)
         working-directory: backend
-        run: npm ci --omit=dev --ignore-scripts
+        # npm ci COMPLETO, sin --omit=dev: con --omit=dev, el npm del runner
+        # puede validar mal copias anidadas de una dependencia cuya copia
+        # top-level es solo-dev y abortar con "Missing: <pkg> from lock
+        # file" aunque el lockfile esté perfectamente en sync (visto en el
+        # despliegue de Colombia con yaml@2.9.0 bajo openapi3-ts). Instalar
+        # devDeps de más es más barato que un nocturno en rojo falso.
+        run: npm ci --ignore-scripts
 
       - name: verify-jobs production
         env:
