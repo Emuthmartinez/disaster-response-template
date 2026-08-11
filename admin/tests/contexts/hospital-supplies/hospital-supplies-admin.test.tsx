@@ -128,6 +128,8 @@ function renderWithSession(capabilities: string[]) {
         user: { id: "u", email: "demo@example.test", roleId: null, orgId: null, isAdmin: false },
         capabilities,
         isLoading: false,
+        sessionCheckFailed: false,
+        retrySessionCheck: () => {},
         login: vi.fn(),
         logout: vi.fn(),
         can: (capability) => capabilities.includes(capability),

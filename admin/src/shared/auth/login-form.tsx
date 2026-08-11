@@ -25,8 +25,12 @@ export function LoginForm({ onSubmit }: LoginFormProps) {
     setPending(true);
     try {
       await onSubmit(email, password);
-    } catch {
-      setError("Credenciales inválidas. Inténtalo de nuevo.");
+    } catch (err) {
+      // El mensaje viene del BFF (401 credenciales / 429 rate limit / 502
+      // backend caído). Decir "credenciales inválidas" ante un 502 hacía que
+      // la gente dudara de su contraseña durante un blip del backend.
+      const message = err instanceof Error && err.message ? err.message : null;
+      setError(message ?? "Credenciales inválidas. Inténtalo de nuevo.");
     } finally {
       setPending(false);
     }
