@@ -23,7 +23,12 @@
  *  guardar sin restricciones de "opaque response".
  */
 
-const CACHE_VERSION = "v7";
+// v8: purga los caches de API v7 envenenados — un teléfono cuyo PRIMER fetch
+// del día vencía el timeout (Neon frío de madrugada) recibía su snapshot de
+// hace días como si fuera actual, y como el cache solo se actualizaba con un
+// fetch EXITOSO, nunca sanaba (visto en producción: "15 reportadas" con 100
+// personas en base). Ver networkFirst: ahora revalida en segundo plano.
+const CACHE_VERSION = "v8";
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const PHOTO_CACHE = `photos-${CACHE_VERSION}`;
 const API_CACHE = `api-${CACHE_VERSION}`;
@@ -160,15 +165,67 @@ async function cacheFirst(request, cacheName) {
   }
 }
 
-async function networkFirst(request, cacheName) {
+// Guarda la respuesta con sello de CUÁNDO se cacheó: es lo que permite decirle
+// a la app "esto es de hace X" cuando toca servir respaldo.
+async function putWithTimestamp(cache, request, response) {
+  const headers = new Headers(response.headers);
+  headers.set("x-sw-cached-at", String(Date.now()));
+  const body = await response.arrayBuffer();
+  await cache.put(
+    request,
+    new Response(body, { status: response.status, statusText: response.statusText, headers }),
+  );
+}
+
+// Al servir respaldo, inyecta `__swStaleAt` (epoch-ms de cuándo se cacheó) en
+// cuerpos JSON de tipo objeto, para que la UI pueda AVISAR que los datos no
+// son actuales en vez de presentarlos como frescos. En un directorio de
+// personas desaparecidas, un "encontrada/desaparecida" congelado de hace días
+// mostrado como actual es un dato falso — el aviso es parte del contrato.
+async function markStale(cached) {
+  const cachedAt = Number(cached.headers.get("x-sw-cached-at")) || null;
+  const contentType = cached.headers.get("content-type") || "";
+  if (!cachedAt || !contentType.includes("application/json")) return cached;
+  try {
+    const body = await cached.clone().json();
+    if (typeof body !== "object" || body === null || Array.isArray(body)) return cached;
+    body.__swStaleAt = cachedAt;
+    const headers = new Headers(cached.headers);
+    headers.set("x-sw-stale", "1");
+    headers.delete("content-length");
+    return new Response(JSON.stringify(body), {
+      status: cached.status,
+      statusText: cached.statusText,
+      headers,
+    });
+  } catch {
+    return cached;
+  }
+}
+
+async function networkFirst(event, request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
     const fresh = await fetchWithTimeout(request, API_TIMEOUT_MS);
-    if (fresh.ok) cache.put(request, fresh.clone());
+    if (fresh.ok) await putWithTimestamp(cache, request, fresh.clone());
     return fresh;
   } catch {
     const cached = await cache.match(request);
-    if (cached) return cached;
+    if (cached) {
+      // ROMPE EL CICLO VICIOSO: sin esto, un backend frío que vence el timeout
+      // en la primera visita del día servía el snapshot viejo Y el cache jamás
+      // se actualizaba (solo se escribía en fetch exitoso), así que TODAS las
+      // visitas siguientes repetían el dato congelado. La revalidación en
+      // segundo plano usa un timeout amplio (el arranque en frío de Neon puede
+      // superar los 8 s), repuebla el cache al terminar y de paso CALIENTA el
+      // backend para el siguiente poll de la app (60 s).
+      event.waitUntil(
+        fetchWithTimeout(new Request(request.url), 30_000)
+          .then((late) => (late.ok ? putWithTimestamp(cache, request, late) : null))
+          .catch(() => {}),
+      );
+      return markStale(cached);
+    }
     // Sin red y sin caché: degradamos con una respuesta JSON sintética en vez de
     // propagar el error. Si hiciéramos `throw`, `event.respondWith()` recibiría una
     // promesa rechazada y el navegador filtraría "FetchEvent.respondWith received an
@@ -243,9 +300,10 @@ self.addEventListener("fetch", (event) => {
   }
 
   // 3. APIs JSON: network-first con cache de respaldo (incluye el host API
-  //    cross-origin, ver `isApiRequest`).
+  //    cross-origin, ver `isApiRequest`). El respaldo va MARCADO como stale y
+  //    dispara revalidación en segundo plano — ver networkFirst.
   if (apiRequest) {
-    event.respondWith(networkFirst(request, API_CACHE));
+    event.respondWith(networkFirst(event, request, API_CACHE));
     return;
   }
 

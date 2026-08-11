@@ -94,7 +94,18 @@ export function useMissingStats(pollMs = 60_000) {
   return useQuery({
     queryKey: qk.missing.stats,
     queryFn: ({ signal }) =>
-      apiGet<{ stats: MissingStats }>("/api/missing/stats", signal).then((r) => r.stats),
+      apiGet<{ stats: MissingStats; __swStaleAt?: number }>(
+        "/api/missing/stats",
+        signal,
+      ).then((r) => ({
+        ...r.stats,
+        // El service worker inyecta __swStaleAt cuando sirve RESPALDO cacheado
+        // (backend inalcanzable o lento): epoch-ms de cuándo se cacheó. La UI
+        // lo usa para AVISAR que los números no son actuales — sin esto, un
+        // snapshot de hace días se presenta como estado vigente del directorio
+        // (visto en producción: "15 reportadas" con 100 personas en base).
+        swStaleAt: r.__swStaleAt,
+      })),
     refetchInterval: pollMs,
   });
 }

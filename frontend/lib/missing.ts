@@ -47,6 +47,13 @@ export interface MissingStats {
   found: number;
   total: number;
   onMap: number;
+  /**
+   * Solo presente cuando el service worker sirvió RESPALDO cacheado (backend
+   * inalcanzable o lento): epoch-ms de cuándo se cacheó ese snapshot. La UI
+   * lo usa para avisar "datos guardados de hace X" en vez de presentar
+   * números congelados como actuales. En SSR/prefetch nunca viene.
+   */
+  swStaleAt?: number;
 }
 
 export interface MissingListParams {

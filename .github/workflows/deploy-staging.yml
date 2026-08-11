@@ -212,6 +212,19 @@ jobs:
             CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
             npx wrangler deploy --env staging --old-asset-ttl 86400'
 
+      # Misma purga del SW que en producción (ver deploy-frontend.yml): el
+      # borde lo retiene y un deploy del service worker no llegaría nunca.
+      - name: Purgar service worker del borde
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_STAGING }}
+        run: |
+          WEB_DOMAIN="staging.$(jq -r '.domains.web' config/deployment.config.json)"
+          doppler run --command '
+            curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
+              -H "Authorization: Bearer $CLOUDFLARE_ZONE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "{\"files\":[\"https://'"$WEB_DOMAIN"'/sw.js\"]}"'
+
       - name: Smoke check
         run: |
           set -euo pipefail

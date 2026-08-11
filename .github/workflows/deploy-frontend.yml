@@ -135,6 +135,26 @@ jobs:
             CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
             npx wrangler deploy --old-asset-ttl 86400'
 
+      # El borde retiene /sw.js: Workers Assets responde ANTES de la fase de
+      # cache rules de la zona (igual que la API en un custom domain), así que
+      # ni el must-revalidate del origen ni una regla de bypass lo alcanzan.
+      # Sin esta purga, un deploy del service worker NO llega nunca a los
+      # navegadores (visto en vivo en el despliegue de Colombia el 2026-08-11:
+      # v8 desplegado, el borde sirviendo v7 con HIT). El SW controla el cache
+      # de TODOS los clientes: purgarlo es parte del deploy, no un extra.
+      # CLOUDFLARE_ZONE_ID y CLOUDFLARE_ZONE_API_TOKEN vienen de Doppler (ver
+      # docs/cloudflare-tokens.md — la purga es permiso de ZONA, no de cuenta).
+      - name: Purgar service worker del borde
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          WEB_DOMAIN="$(jq -r '.domains.web' config/deployment.config.json)"
+          doppler run --command '
+            curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
+              -H "Authorization: Bearer $CLOUDFLARE_ZONE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "{\"files\":[\"https://'"$WEB_DOMAIN"'/sw.js\",\"https://www.'"$WEB_DOMAIN"'/sw.js\"]}"'
+
       # Smoke check post-deploy. No solo "responde 200":
       #   (a) el HTML servido lleva el fingerprint de ESTE build, no uno
       #       cacheado por el edge — ver dpl=<APP_BUILD_SHA> más abajo;
