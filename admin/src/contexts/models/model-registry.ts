@@ -20,7 +20,16 @@ export interface ModelColumn {
 export interface ModelField {
   key: string;
   label: string;
-  type?: "text" | "number";
+  /**
+   * `select-model`: un <select> poblado con las filas de otro modelo del
+   * registro (p.ej. elegir hospital al crear un paciente, en vez de pegar un
+   * UUID a mano). El value es el `id` de la fila elegida.
+   */
+  type?: "text" | "number" | "select-model";
+  /** Para select-model: path del modelo que da las opciones. */
+  optionsModel?: string;
+  /** Para select-model: campo visible de la opción (default: name). */
+  optionLabelKey?: string;
   required?: boolean;
 }
 
@@ -139,7 +148,14 @@ export const MODELS = [
       { key: "status", label: "Estado" },
     ],
     createFields: [
-      { key: "hospitalId", label: "Hospital ID", required: true },
+      {
+        key: "hospitalId",
+        label: "Hospital",
+        type: "select-model",
+        optionsModel: "hospitals",
+        optionLabelKey: "name",
+        required: true,
+      },
       { key: "name", label: "Nombre", required: true },
       { key: "age", label: "Edad", type: "number" },
       { key: "condition", label: "Condición" },
@@ -208,6 +224,28 @@ export const MODELS = [
       { key: "message", label: "Mensaje", required: true },
     ],
     editFields: [{ key: "read", label: "Leído (true)", required: true }],
+  },
+  {
+    path: "deletion-requests",
+    label: "Solicitudes de eliminación de datos",
+    readCapability: "deletion:read",
+    capabilityRoot: "deletion",
+    columns: [
+      { key: "name", label: "Nombre" },
+      { key: "email", label: "Correo" },
+      { key: "details", label: "Detalle" },
+      { key: "status", label: "Estado" },
+    ],
+    // Sin createFields: las solicitudes ENTRAN por el formulario público
+    // (/solicitar-borrado). Aquí solo se resuelven.
+    //
+    // El nombre "Ley 1581" (ley colombiana de protección de datos) es
+    // deliberadamente genérico aquí: cada despliegue apunta a su propia ley
+    // aplicable — GDPR (UE), CCPA (California), Ley 1581 (Colombia), u otra —
+    // y solo cambia el texto que muestra el operador, no este código.
+    editFields: [
+      { key: "status", label: "Estado (pending | resolved | rejected)", required: true },
+    ],
   },
 ] as const satisfies readonly ModelConfig[];
 

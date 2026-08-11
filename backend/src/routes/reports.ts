@@ -16,7 +16,7 @@
 import { Router } from "express";
 import express from "express";
 import { z } from "zod";
-import { asyncHandler, rateLimit, requireAdmin, requireHuman, validate } from "@/middleware";
+import { asyncHandler, rateLimit, requireAdmin, requireHuman, setPublicPhotoHeaders, validate } from "@/middleware";
 import { jsonWithEtag } from "@/lib/http";
 import { hashIp } from "@/lib/client-ip";
 import { badRequest, HttpError, notFound, payloadTooLarge, serviceUnavailable } from "@/lib/errors";
@@ -196,8 +196,7 @@ reportsRouter.get(
       return;
     }
     // La foto de un reporte no cambia: caché agresiva.
-    res.setHeader("Content-Type", photo.contentType);
-    res.setHeader("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable");
+    setPublicPhotoHeaders(res, photo.contentType);
     res.send(photo.buffer);
   }),
 );

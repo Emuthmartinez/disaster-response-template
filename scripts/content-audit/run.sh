@@ -25,6 +25,33 @@ PATTERNS_FILE="$SCRIPT_DIR/banned-patterns.txt"
 # exists, so a fresh clone of the public template (which never ships this
 # file) still runs the generic checks with no configuration needed.
 LOCAL_PATTERNS_FILE="$SCRIPT_DIR/banned-patterns.local.txt"
+# Same overlay idea, for PATHS instead of literals: a real deployment that
+# commits its own brand assets (logo SVGs, etc.) somewhere other than
+# frontend/public|app lists those path prefixes here instead of editing this
+# public script. Gitignored, optional, and only honored in "deployment" mode
+# — see MODE_FILE below. See section 2a for how it's used.
+ASSET_ALLOW_LOCAL_FILE="$SCRIPT_DIR/asset-allow.local.txt"
+# template-mode vs deployment-mode switch. A fresh clone of the public
+# template has no scripts/content-audit/mode file, so it defaults to
+# "template" — the strictest behavior, unchanged from before this switch
+# existed. A real deployment that has been through disaster-brand and wants
+# its own committed assets to stop tripping the audit sets this file to
+# "deployment" (see CONTRIBUTING.md "go-live", or the disaster-content-audit
+# skill, for the exact command). Kept as
+# a plain file rather than an env var so it's a durable, committed decision
+# that shows up in `git diff`, not something a stray shell env can flip.
+MODE_FILE="$SCRIPT_DIR/mode"
+AUDIT_MODE="template"
+if [ -f "$MODE_FILE" ]; then
+  AUDIT_MODE="$(tr -d '[:space:]' < "$MODE_FILE")"
+fi
+case "$AUDIT_MODE" in
+  template|deployment) : ;;
+  *)
+    echo "content-audit: scripts/content-audit/mode has an unknown value ('$AUDIT_MODE'); expected 'template' or 'deployment'. Falling back to 'template' (the stricter mode)." >&2
+    AUDIT_MODE="template"
+    ;;
+esac
 
 cd "$REPO_ROOT" || exit 2
 
@@ -66,28 +93,63 @@ report() {
 
 # ===========================================================================
 # 0. Enumerate the working tree once, excluding noise directories.
-#    (.git, node_modules, .next — matches the exclusion the spec asks for;
-#    applied consistently to every check below, not just the grep pass, so
-#    the audit doesn't drown in third-party node_modules assets.)
+#    (.git, node_modules, .next, .open-next, .wrangler — the last two are
+#    Cloudflare Workers build output, gitignored; applied consistently to
+#    every check below, not just the grep pass, so the audit doesn't drown
+#    in third-party node_modules or build-output assets.)
 # ===========================================================================
 find . \
-  \( -path './.git' -o -path '*/node_modules' -o -path '*/.next' \) -prune -o \
+  \( -path './.git' -o -path '*/node_modules' -o -path '*/.next' \
+     -o -path '*/.open-next' -o -path '*/.wrangler' \) -prune -o \
   -type f -print > "$FILELIST_TMP"
 
-# Content-scan file list: same, minus the pattern file(s) themselves. They
+# Content-scan file list: same, minus the pattern file(s) themselves (they
 # have to contain the banned literals verbatim in order to ban them, so they
-# would always self-match otherwise.
+# would always self-match otherwise), minus .svg files and anything under a
+# "generated/" directory.
+#
+# WHY .svg AND /generated/ ARE EXCLUDED FROM THIS SPECIFIC SCAN:
+# the hard-banned "any public IPv4" pattern matches decimal-dotted number
+# sequences, and real SVG <path> coordinate data is exactly that shape —
+# "M652.17,195.34c-4.95,0-9.11…" — so any hand-drawn or complex SVG logo
+# trips a [hard-banned] false positive purely on numeric coincidence. The
+# same happens to a generated TS/JS file that embeds that same SVG as a
+# data-URI (e.g. a codegen'd lib/generated/brand-logo.ts). No real coverage
+# is lost: SVGs still go through the [banned-svg-payload]/[banned-svg-location]
+# checks below (no <image> tag, no base64, only in an allowed directory) and
+# through the human EXIF/GPS review checklist — what's lost is a false
+# positive that, tripping on every run, is exactly what makes people stop
+# reading the report.
 SELF="./scripts/content-audit/banned-patterns.txt"
 SELF_LOCAL="./scripts/content-audit/banned-patterns.local.txt"
-grep -v -F -x -e "$SELF" -e "$SELF_LOCAL" "$FILELIST_TMP" > "$CONTENT_FILELIST_TMP" || true
+grep -v -F -x -e "$SELF" -e "$SELF_LOCAL" "$FILELIST_TMP" \
+  | grep -v -E '\.svg$|/generated/' > "$CONTENT_FILELIST_TMP" || true
 
-# Context-banned allowlist: the origin-story docs, exact paths only (does
-# NOT exempt nested READMEs like admin/README.md or frontend/AGENTS.md).
+# Context-banned allowlist: documentation surfaces where the template's own
+# origin-story words (see the CONTEXT: patterns in banned-patterns.txt) are
+# expected prose, not an accidental real-world tie. Root-level *.md (README,
+# CONTRIBUTING, SECURITY, AGENTS, CLAUDE, …) plus the whole docs/ tree — does
+# NOT exempt nested docs like admin/README.md or frontend/AGENTS.md, and the
+# ban stays firm everywhere else: frontend/, backend/, admin/, infra/,
+# config/, which is where a copied-in literal would actually break or leak
+# something.
 is_allowlisted() {
   case "$1" in
-    ./README.md|./README.es.md|./docs/standup-guide.md) return 0 ;;
-    *) return 1 ;;
+    ./docs/*) return 0 ;;
   esac
+  # NOTE: a bare `./*.md` case pattern would ALSO match nested paths like
+  # ./frontend/README.md — case/glob `*` matches `/` too, it is not scoped
+  # to one path segment. So root-only is enforced explicitly: strip the
+  # leading "./" and reject anything with a further "/" in it.
+  case "$1" in
+    ./*.md)
+      case "${1#./}" in
+        */*) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+  esac
+  return 1
 }
 : > "$CONTEXT_FILELIST_TMP"
 while IFS= read -r f; do
@@ -157,7 +219,7 @@ if [ -s "$CONTEXT_PAT_TMP" ] && [ "${#context_files[@]}" -gt 0 ]; then
   context_hits="$(grep -H -n -i -I -E -f "$CONTEXT_PAT_TMP" -- "${context_files[@]}" 2>/dev/null || true)"
   if [ -n "$context_hits" ]; then
     while IFS= read -r hit; do
-      [ -n "$hit" ] && report "[context-banned] $hit  (allowed only in README.md, README.es.md, docs/standup-guide.md)"
+      [ -n "$hit" ] && report "[context-banned] $hit  (allowed only in root *.md files and docs/**)"
     done <<CONTEXTHITS
 $context_hits
 CONTEXTHITS
@@ -165,38 +227,112 @@ CONTEXTHITS
 fi
 
 # ===========================================================================
-# 2a. No binary asset extensions, anywhere, except a small SVG allowlist.
+# 2a. Binary/vector assets: banned everywhere except a small allowlist of
+#     directories. The built-in allowlist is always frontend/public/ and
+#     frontend/app/ (where Next.js expects icons/OG images/etc to live).
+#
+#     In "deployment" mode ONLY, that allowlist can be widened with extra
+#     path prefixes from a private, gitignored overlay file
+#     (asset-allow.local.txt — same idea as banned-patterns.local.txt, for
+#     paths instead of literals). This exists for real deployments that
+#     commit their own brand assets (logos, favicons, OG images) somewhere
+#     other than frontend/public|app — e.g. a top-level brand/ directory —
+#     without having to edit this public script to do it. In "template"
+#     mode (the default — see MODE_FILE above), that overlay file is
+#     IGNORED even if present, so a fresh clone of the public template keeps
+#     the strict original behavior no matter what a stray local file says.
+#
+#     Binary raster extensions were historically banned even inside the
+#     allowed directories (SVG was the only asset type ever allowed at
+#     all). In "deployment" mode, any prefix on the allowlist — built-in or
+#     from the overlay — allows BOTH binary extensions and SVGs, since a
+#     real deployment's brand kit is not always vector-only (a favicon.ico
+#     or an OG PNG under frontend/public/ is completely ordinary). In
+#     "template" mode, binary extensions stay banned everywhere, full stop
+#     — only SVGs get the directory allowlist, exactly like before this
+#     mechanism existed.
 # ===========================================================================
+ASSET_ALLOW_PREFIXES="./frontend/public/ ./frontend/app/"
+if [ "$AUDIT_MODE" = "deployment" ] && [ -f "$ASSET_ALLOW_LOCAL_FILE" ]; then
+  while IFS= read -r prefix || [ -n "$prefix" ]; do
+    case "$prefix" in
+      ''|'#'*) continue ;;
+    esac
+    ASSET_ALLOW_PREFIXES="$ASSET_ALLOW_PREFIXES $prefix"
+  done < "$ASSET_ALLOW_LOCAL_FILE"
+elif [ "$AUDIT_MODE" = "template" ] && [ -f "$ASSET_ALLOW_LOCAL_FILE" ]; then
+  echo "content-audit: scripts/content-audit/asset-allow.local.txt exists but mode is 'template' — ignoring it. Switch scripts/content-audit/mode to 'deployment' to honor it." >&2
+fi
+
+is_asset_allowed() {
+  # $1 = path as printed by find (starts with ./)
+  for prefix in $ASSET_ALLOW_PREFIXES; do
+    case "$1" in
+      "$prefix"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Self-hosted webfonts are a TEMPLATE convention, not a deployment identity
+# concern — this template itself ships frontend/app/fonts/*.woff2 (see
+# frontend/app/layout.tsx and offline-build-frontend in ci.yml: build-time
+# network calls to Google Fonts broke a real deploy once, so the fonts are
+# committed instead of fetched). That makes this exemption unconditional —
+# active in BOTH modes, unlike ASSET_ALLOW_PREFIXES above — and scoped
+# narrowly to font extensions only, so it can't be used to smuggle in an
+# image.
+FONT_EXTS="woff woff2 ttf otf"
+FONT_ALLOW_PREFIXES="./frontend/app/fonts/ ./frontend/public/fonts/"
+is_font_allowed() {
+  # $1 = path as printed by find (starts with ./)
+  for prefix in $FONT_ALLOW_PREFIXES; do
+    case "$1" in
+      "$prefix"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 BANNED_EXTS="jpg jpeg png gif webp ico woff woff2 ttf otf mp4 pdf"
 while IFS= read -r f; do
   lower_f="$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')"
   for ext in $BANNED_EXTS; do
     case "$lower_f" in
       *".$ext")
-        report "[banned-extension] $f  (.$ext assets are not allowed in this template; use small inline SVG or text)"
+        case " $FONT_EXTS " in
+          *" $ext "*)
+            is_font_allowed "$f" && continue 2
+            ;;
+        esac
+        if [ "$AUDIT_MODE" = "deployment" ] && is_asset_allowed "$f"; then
+          continue 2
+        fi
+        report "[banned-extension] $f  (.$ext assets are not allowed in this template; use small inline SVG/text, a self-hosted font under frontend/app/fonts/, or — in deployment mode — an allowed asset directory)"
         ;;
     esac
   done
 done < "$FILELIST_TMP"
 
-# SVGs are only allowed under frontend/public/ or frontend/app/, and must be
-# plain vector markup (no <image> tags, no embedded base64 payloads).
+# SVGs: allowed under an allowed directory (see ASSET_ALLOW_PREFIXES above —
+# frontend/public|app always; more in deployment mode), and wherever they
+# ARE allowed they must still be plain vector markup — no <image> tags, no
+# embedded base64. That check is the one with teeth: it's what stops a
+# raster photo being smuggled inside an .svg, so it runs across every
+# allowed directory, not just the built-in ones.
 while IFS= read -r f; do
   lower_f="$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')"
   case "$lower_f" in
     *.svg) : ;;
     *) continue ;;
   esac
-  case "$f" in
-    ./frontend/public/*|./frontend/app/*)
-      if grep -q -i -E '<image|base64' -- "$f" 2>/dev/null; then
-        report "[banned-svg-payload] $f  (svg must not contain an <image> tag or a base64 payload)"
-      fi
-      ;;
-    *)
-      report "[banned-svg-location] $f  (svg files are only allowed under frontend/public/ or frontend/app/)"
-      ;;
-  esac
+  if is_asset_allowed "$f"; then
+    if grep -q -i -E '<image|base64' -- "$f" 2>/dev/null; then
+      report "[banned-svg-payload] $f  (svg must not contain an <image> tag or a base64 payload)"
+    fi
+  else
+    report "[banned-svg-location] $f  (svg files belong under one of: $ASSET_ALLOW_PREFIXES)"
+  fi
 done < "$FILELIST_TMP"
 
 # ===========================================================================
@@ -225,13 +361,36 @@ while IFS= read -r f; do
 done < "$FILELIST_TMP"
 
 # ===========================================================================
-# 2c. Git history sanity: a freshly-templated repo should have a small,
-#     recent history. Warn (as a reportable finding) if that stops being
-#     true — it usually means the original project's history leaked in.
+# 2c. Git history sanity: right after templating a fresh fork, the history
+#     should be small and recent — a big/old history usually means the
+#     original project's history (or some other repo's) leaked in.
+#
+#     This only runs ONCE per repo, gated on a marker file
+#     (scripts/content-audit/.content-audit-fresh, committed by the public
+#     template). Why: a commit-count check has no sensible threshold that
+#     works both "right after forking" AND "two months into a real
+#     deployment" — a live deployment's OWN history legitimately grows past
+#     any fixed number, so a check that runs forever eventually trips on
+#     every single run and gets ignored, right when it might actually catch
+#     something. Gating it on the marker's presence, and deleting the
+#     marker once the check has run, means: it fires exactly once (whenever
+#     the marker still exists — including, deliberately, in CI for any PR
+#     that hasn't removed it yet), and then gets out of the way permanently
+#     once a human commits its removal. See CONTRIBUTING.md for the exact
+#     step (part of the standard fork/rename flow).
+#
+#     The marker is deleted from the WORKING TREE below regardless of
+#     pass/fail — a failing first run still reports the finding same as
+#     always (exit 1 further down), it just won't be asked again next time.
+#     Deleting the local file does nothing to a fresh CI checkout by itself;
+#     it only takes effect once someone commits that deletion.
 # ===========================================================================
 CUTOFF_DATE="2026-07-10"
+FRESH_MARKER="$SCRIPT_DIR/.content-audit-fresh"
 
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [ ! -f "$FRESH_MARKER" ]; then
+  echo "content-audit: scripts/content-audit/.content-audit-fresh not present; skipped the one-time git-history sanity check (already run, or this checkout predates the marker)." >&2
+elif git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   commit_count="$(git rev-list --all --count 2>/dev/null || echo 0)"
 
   if [ "${commit_count:-0}" -gt 50 ] 2>/dev/null; then
@@ -255,9 +414,14 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       echo "[git-history] could not determine cutoff epoch for $CUTOFF_DATE on this system; skipped the pre-$CUTOFF_DATE commit check" >&2
     fi
   fi
+
+  rm -f "$FRESH_MARKER"
+  echo "content-audit: one-time git-history check ran; removed scripts/content-audit/.content-audit-fresh from the working tree. Commit that removal (git add -A && git commit) so future runs — local and CI — stop running this check." >&2
 else
-  # Not a git checkout at all (e.g. an extracted zip) — nothing to sanity
-  # check, and that by itself isn't a content-security finding.
+  # Marker present, but not a git checkout at all (e.g. an extracted zip) —
+  # nothing to sanity check, and that by itself isn't a content-security
+  # finding. Leave the marker in place: there was no git history to check,
+  # so this wasn't a real "first pass".
   echo "[git-history] not inside a git working tree; skipped the history sanity check" >&2
 fi
 

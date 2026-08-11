@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Envoltorio de OpenTofu para este módulo.
+#
+# El provider de Cloudflare SOLO lee la variable de entorno
+# CLOUDFLARE_API_TOKEN. Este módulo necesita ahí el token de ZONA (ver
+# README.md, "Permisos del token" — el token de CUENTA no sirve aquí, la API
+# responde 403 en DNS/settings/rulesets/DNSSEC si se lo pasas). Si tu gestor
+# de secretos guarda ese token con otro nombre (aquí se asume el genérico
+# CLOUDFLARE_ZONE_API_TOKEN; ajústalo si el tuyo usa otro), este script hace
+# el mapeo por ti para no depender de recordarlo cada vez.
+#
+#   ./tf plan
+#   ./tf apply
+#
+# Este script asume que CLOUDFLARE_ZONE_API_TOKEN ya está en el entorno
+# cuando lo invocas — inyéctalo con tu gestor de secretos. Ejemplo con
+# Doppler (ver docs/runbook-cloudflare-launch.md si tu fork lo tiene):
+#
+#   doppler run --project <tu-proyecto-doppler> --config prd -- ./tf plan
+#
+# Si no usas un gestor de secretos, exporta CLOUDFLARE_API_TOKEN directamente
+# y salta este wrapper (`tofu plan` a secas basta):
+#
+#   export CLOUDFLARE_API_TOKEN=...
+#   tofu plan
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+: "${CLOUDFLARE_ZONE_API_TOKEN:?Falta CLOUDFLARE_ZONE_API_TOKEN en el entorno (token de ZONA de Cloudflare: DNS/settings/rulesets/DNSSEC). Inyéctalo con tu gestor de secretos antes de llamar a ./tf, p.ej.: doppler run --project <tu-proyecto-doppler> --config prd -- ./tf plan}"
+
+CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ZONE_API_TOKEN" exec tofu "$@"

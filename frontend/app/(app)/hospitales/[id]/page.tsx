@@ -13,8 +13,7 @@ import {
 import HospitalDetailView from "@/components/features/hospitals/HospitalDetailView";
 import SubPageShell from "@/components/layout/SubPageShell";
 import { pageMetadata } from "@/lib/metadata";
-import { JsonLd } from "@/components/seo/JsonLd";
-import { breadcrumbSchema, graph, ORG_ID } from "@/lib/jsonld";
+import { ORG_ID } from "@/lib/jsonld";
 import { SITE_URL } from "@/lib/site";
 import { deploymentConfig } from "@/lib/deployment-config";
 
@@ -83,19 +82,17 @@ export default async function HospitalPage({ params }: PageProps) {
     areaServed: { "@type": "Place", name: deploymentConfig.regionLabel },
     provider: { "@id": ORG_ID },
   };
-  const hospitalGraph = graph(
-    hospitalJsonLd,
-    breadcrumbSchema([
-      { name: "Inicio", path: "/" },
-      { name: "Hospitales", path: "/hospitales" },
-      { name: hospital.name, path: `/hospitales/${canonicalSlug}` },
-    ]),
-  );
-
   return (
-    <SubPageShell breadcrumb={hospital.name} path={`/hospitales/${canonicalSlug}`}>
-      <JsonLd data={hospitalGraph} />
-
+    <SubPageShell
+      breadcrumb={hospital.name}
+      path={`/hospitales/${canonicalSlug}`}
+      breadcrumbs={[
+        { name: "Inicio", path: "/" },
+        { name: "Hospitales", path: "/hospitales" },
+        { name: hospital.name, path: `/hospitales/${canonicalSlug}` },
+      ]}
+      extraSchema={[hospitalJsonLd]}
+    >
       <section
         className="border-b border-[var(--eborder)]"
         style={{

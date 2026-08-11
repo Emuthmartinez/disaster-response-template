@@ -18,6 +18,21 @@ export const qk = {
       ["missing", "map", bounds] as const,
     stats: ["missing", "stats"] as const,
   },
+  // Dominio APARTE de `missing` (tabla y endpoints distintos, ver
+  // backend/src/services/pets.ts). Invalidar mascotas nunca toca personas.
+  pets: {
+    all: ["pets"] as const,
+    list: (p: {
+      status: string;
+      page: number;
+      pageSize: number;
+      q?: string;
+      species?: string;
+    }) => ["pets", "list", p] as const,
+    map: (bounds: { north: number; south: number; east: number; west: number } | null) =>
+      ["pets", "map", bounds] as const,
+    stats: ["pets", "stats"] as const,
+  },
   reports: {
     all: ["reports"] as const,
     list: ["reports", "list"] as const,

@@ -1,5 +1,6 @@
 import type { MissingMapMarker } from "@/hooks/missing";
-import type { EmergencyReport } from "@/lib/types";
+import type { PetMapMarker } from "@/lib/pets";
+import type { EmergencyReport, Earthquake } from "@/lib/types";
 
 export type MapBounds = {
 	north: number;
@@ -11,7 +12,12 @@ export type MapBounds = {
 export interface MapViewProps {
 	reports: EmergencyReport[];
 	missingMarkers?: MissingMapMarker[];
+	/** Mascotas perdidas con coordenadas. Capa APARTE de missingMarkers. */
+	petMarkers?: PetMapMarker[];
+	/** Catalogo USGS: circulos por magnitud + anillos en el epicentro. */
+	earthquakes?: Earthquake[];
 	showMissingOnMap?: boolean;
+	showPetsOnMap?: boolean;
 	onBoundsChange?: (bounds: MapBounds) => void;
 	draft: { lat: number; lng: number } | null;
 	onPick: (lat: number, lng: number) => void;
@@ -22,6 +28,15 @@ export interface MapViewProps {
 	focus: { lat: number; lng: number; ts: number; id?: string } | null;
 	center: [number, number];
 	zoom: number;
+	/**
+	 * Encuadre inicial opcional (config/deployment.config.json → mapBbox),
+	 * como [[south, west], [north, east]]. Cuando está presente, Leaflet
+	 * encuadra el mapa a esta caja en el PRIMER montaje (p.ej. epicentro +
+	 * su área de impacto) en vez de solo center/zoom — útil cuando el radio
+	 * relevante no es circular. Solo se lee al montar (react-leaflet no
+	 * reacciona a cambios posteriores de `bounds`).
+	 */
+	initialBounds?: [[number, number], [number, number]];
 	/** Pedido para encuadrar el mapa a un conjunto de pines (al filtrar por tipo). */
 	fitRequest?: { points: { lat: number; lng: number }[]; ts: number } | null;
 	/** Overlay meteorologico: radar de lluvia (RainViewer, sin API key). */

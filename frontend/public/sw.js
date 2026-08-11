@@ -9,17 +9,18 @@
  *  - Tiles de OpenStreetMap: NO interceptados — Leaflet los carga como <img>
  *    (img-src https:). Interceptarlos con fetch() en el SW choca con connect-src
  *    y deja el mapa gris en navegadores con SW registrado.
- *  - Otros assets estáticos del propio dominio (_next/static, /icon.svg,
+ *  - Otros assets estáticos del propio dominio (_next/static, /icon-192.png,
  *    manifest, etc.): cache-first.
  *  - APIs JSON (/api/...): siempre network; si falla, devolvemos lo último
  *    cacheado por GET. No interceptamos POST/DELETE.
  *
  * Hosts cross-origin de la API:
- *  El backend vive en api.<dominio> (subdominio dedicado, ver middleware.ts y
- *  NEXT_PUBLIC_API_URL). El SW intercepta las peticiones GET al host API igual
- *  que a las same-origin `/api/...` (necesario para mantener network-first con
- *  fallback offline). Las respuestas vienen con CORS habilitado, así que la
- *  Cache API las puede guardar sin restricciones de "opaque response".
+ *  El backend vive en api.<dominio> (api-staging.<dominio> en despliegues con
+ *  entorno de staging; ver middleware.ts y NEXT_PUBLIC_API_URL). El SW
+ *  intercepta las peticiones GET al host API igual que a las same-origin
+ *  `/api/...` (necesario para mantener network-first con fallback offline).
+ *  Las respuestas vienen con CORS habilitado, así que la Cache API las puede
+ *  guardar sin restricciones de "opaque response".
  */
 
 const CACHE_VERSION = "v7";
@@ -38,6 +39,11 @@ const KEEP_CACHES = new Set([
 const CORE_ASSETS = [
   "/icon.svg",
   "/favicon.ico",
+  "/favicon-32.png",
+  "/favicon-64.png",
+  "/apple-touch-icon.png",
+  "/icon-192.png",
+  "/icon-512.png",
   "/manifest.webmanifest",
 ];
 const CORE_PAGES = ["/", "/privacidad"];
@@ -95,32 +101,62 @@ function isPhotoApi(url) {
 
 // Reconoce las peticiones que apuntan a la superficie `/api/...`, sea en el
 // mismo origen (dev/legado) o en el subdominio API cross-origin
-// (`api.<dominio>`, p.ej. `api.example.org`). Espejo de la heurística
-// de `frontend/middleware.ts` para mantener un solo criterio de "esto es API".
+// (`api.<dominio>` en producción, `api-staging.<dominio>` en staging). Espejo
+// a mano de `matchesApiHost()` en lib/api-host.ts (con prefijo fijo "api": un
+// service worker no puede importar un módulo TypeScript, así que si cambias
+// la regla allá, actualiza también esto). También mantiene un solo criterio
+// con `frontend/middleware.ts` de "esto es API".
 function isApiRequest(url) {
   if (!url.pathname.startsWith("/api/")) return false;
   const sameOrigin = url.origin === self.location.origin;
   if (sameOrigin) return true;
-  // Cross-origin: solo si el host empieza con `api.` (puerto incluido).
-  return url.host.startsWith("api.");
+  // Cross-origin: solo si el host empieza con `api.` o `api-staging.` (puerto
+  // incluido). `api-staging.` es hermano de `api.`, no hijo: sin el segundo
+  // prefijo, staging nunca ejercitaba estas rutas de intercepción del SW y no
+  // probaba lo que producción sí ejecuta.
+  return url.host.startsWith("api.") || url.host.startsWith("api-staging.");
 }
 
 async function cacheFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
-  const cached = await cache.match(request);
+  // ignoreVary: las respuestas de foto llevan `Vary: Origin` (CORS del backend);
+  // sin esto, un match estricto puede fallar según qué cabeceras llevó el request.
+  const cached = await cache.match(request, { ignoreVary: true });
   if (cached) return cached;
   try {
-    const fresh = await fetch(request);
+    // Re-emitimos el request en modo CORS en vez de reenviarlo tal cual: las
+    // fotos se piden desde <img> cross-origin SIN `crossorigin`, y ese request
+    // no-cors produce una respuesta OPACA (status 0, ok false) aunque el backend
+    // devuelva 200. Gatear cache.put por `ok` con opacas deja el cache de fotos
+    // vacío para siempre (el 0 de entradas tras cargar N fotos es la señal) y
+    // mata el modo offline de fotos. El backend ya responde con
+    // Access-Control-Allow-Origin, así que en modo CORS el status es visible:
+    // cacheamos SOLO 200s reales y jamás un error transitorio (una opaca
+    // cacheada de un 500 frío sería una foto rota permanente). Same-origin
+    // (_next/static, iconos) no cambia: mode cors ahí produce respuestas
+    // "basic" normales. Y con timeout, como TODAS las demás estrategias del
+    // fichero: un backend frío puede tardar mucho en la primera foto y sin
+    // límite el respondWith() queda colgado en vez de degradar.
+    const fresh = await fetchWithTimeout(
+      new Request(request.url, { mode: "cors" }),
+      API_TIMEOUT_MS,
+    );
     if (fresh.ok) cache.put(request, fresh.clone());
     return fresh;
   } catch {
-    // El fetch falló (red caída o, p.ej., un redirect de foto a un origen que
-    // `connect-src` no permite). NUNCA propagamos el throw: `respondWith` con una
-    // promesa rechazada genera "Uncaught (in promise): Failed to fetch" en consola
-    // y deja el recurso en error igual. Devolvemos una respuesta de error normal
-    // (503): el `<img>` queda roto (como sin SW) pero sin ruido ni rechazo suelto.
-    if (cached) return cached;
-    return new Response("", { status: 503, statusText: "sw-fetch-failed" });
+    // El fetch CORS falló: red caída, timeout, o un origen que no manda ACAO
+    // (p.ej. un redirect de foto a un CDN externo). Último intento con el
+    // request original no-cors — es lo que hacía siempre este SW: la opaca se
+    // devuelve SIN cachear (no podemos ver su status) pero el <img> la pinta.
+    try {
+      return await fetchWithTimeout(request, API_TIMEOUT_MS);
+    } catch {
+      // NUNCA propagamos el throw: `respondWith` con una promesa rechazada
+      // genera "Uncaught (in promise): Failed to fetch" en consola y deja el
+      // recurso en error igual. Devolvemos un 503 normal: el `<img>` queda roto
+      // (como sin SW) pero sin ruido ni rechazo suelto.
+      return new Response("", { status: 503, statusText: "sw-fetch-failed" });
+    }
   }
 }
 
@@ -147,9 +183,9 @@ async function networkFirst(request, cacheName) {
 
 // AbortController real: al vencer el timeout, CANCELA el fetch — no solo pierde
 // la carrera. Sin esto, un Promise.race dejaba el fetch huérfano corriendo en
-// segundo plano (se veían respuestas de 15s en DevTools iniciadas por sw.js aun
-// cuando el SW ya había devuelto cache a los 2.5s): bandwidth desperdiciado y
-// el pool de conexiones agotado por requests que nadie consume.
+// segundo plano (respuestas lentas iniciadas por sw.js aun cuando el SW ya
+// había devuelto cache): bandwidth desperdiciado y el pool de conexiones
+// agotado por requests que nadie consume.
 function fetchWithTimeout(request, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -219,6 +255,11 @@ self.addEventListener("fetch", (event) => {
     (url.pathname.startsWith("/_next/static/") ||
       url.pathname === "/icon.svg" ||
       url.pathname === "/favicon.ico" ||
+      url.pathname === "/favicon-32.png" ||
+      url.pathname === "/favicon-64.png" ||
+      url.pathname === "/apple-touch-icon.png" ||
+      url.pathname === "/icon-192.png" ||
+      url.pathname === "/icon-512.png" ||
       url.pathname === "/manifest.webmanifest" ||
       url.pathname.endsWith(".png") ||
       url.pathname.endsWith(".svg") ||

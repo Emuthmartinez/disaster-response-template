@@ -19,7 +19,7 @@
  */
 import { Router, json } from "express";
 import { z } from "zod";
-import { asyncHandler, rateLimit, requireHuman, requireAdmin, validate } from "@/middleware";
+import { asyncHandler, rateLimit, requireHuman, requireAdmin, setPublicPhotoHeaders, validate } from "@/middleware";
 import { jsonWithEtag } from "@/lib/http";
 import { cached } from "@/lib/cache";
 import { badRequest, payloadTooLarge, notFound, serviceUnavailable } from "@/lib/errors";
@@ -92,7 +92,6 @@ const LIST_CACHE = { "Cache-Control": "public, max-age=0, s-maxage=2, stale-whil
 const SEARCH_CACHE = { "Cache-Control": "public, max-age=0, s-maxage=30, stale-while-revalidate=120" };
 const MAP_CACHE = { "Cache-Control": "public, max-age=0, s-maxage=3, stale-while-revalidate=15" };
 const STATS_CACHE = { "Cache-Control": "public, max-age=0, s-maxage=5, stale-while-revalidate=30" };
-const PHOTO_CACHE = "public, max-age=31536000, s-maxage=31536000, immutable";
 
 // Parser de body para los endpoints que aceptan foto en base64 (~1.4 MB). El
 // parser global del server (256kb) es muy chico para estos; lo subimos solo
@@ -214,8 +213,7 @@ missingRouter.get(
       return;
     }
     // La foto de una persona no cambia: se cachea de forma agresiva en el CDN.
-    res.setHeader("Content-Type", photo.contentType);
-    res.setHeader("Cache-Control", PHOTO_CACHE);
+    setPublicPhotoHeaders(res, photo.contentType);
     res.status(200).end(photo.buffer);
   }),
 );
@@ -233,8 +231,7 @@ missingRouter.get(
       res.redirect(302, photo.redirectTo);
       return;
     }
-    res.setHeader("Content-Type", photo.contentType);
-    res.setHeader("Cache-Control", PHOTO_CACHE);
+    setPublicPhotoHeaders(res, photo.contentType);
     res.status(200).end(photo.buffer);
   }),
 );

@@ -17,62 +17,31 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiSend } from "@/lib/api";
 import { qk } from "@/lib/query-keys";
+import {
+  buildMissingUrl,
+  type MissingListParams,
+  type MissingListResponse,
+  type MissingPerson,
+  type MissingStats,
+} from "@/lib/missing";
 
-export interface MissingPerson {
-  id: string;
-  name: string;
-  age: number | null;
-  nationality?: string;
-  description: string;
-  lastSeen: string;
-  contact: string;
-  photoUrl: string | null;
-  status?: "active" | "found";
-  resolutionNote?: string | null;
-  resolutionPhotoUrl?: string | null;
-  resolvedAt?: number | null;
-  createdAt: number;
-}
-
-/** Marcador ligero para el mapa (subset de MissingPerson + lat/lng). */
-export interface MissingMapMarker {
-  id: string;
-  name: string;
-  age: number | null;
-  nationality: string;
-  lastSeen: string;
-  photoUrl: string | null;
-  lat: number;
-  lng: number;
-  createdAt: number;
-}
-
-export interface MissingListResponse {
-  people: MissingPerson[];
-  total: number;
-  totalCapped: boolean;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  persistent: boolean;
-}
-
-export interface MissingListParams {
-  status: "active" | "found" | "all";
-  page: number;
-  pageSize: number;
-  q?: string;
-}
-
-function buildMissingUrl(p: MissingListParams): string {
-  const sp = new URLSearchParams({
-    status: p.status,
-    page: String(p.page),
-    pageSize: String(p.pageSize),
-  });
-  if (p.q && p.q.length >= 3) sp.set("q", p.q);
-  return `/api/missing?${sp.toString()}`;
-}
+// Los tipos y helpers puros del dominio viven en lib/missing.ts (sin
+// "use client") para que el prefetch SSR de app/(app)/page.tsx pueda construir
+// la MISMA URL y la MISMA queryKey. Se re-exportan aquí para no romper a los
+// consumidores que ya importan desde "@/hooks/missing".
+export {
+  MISSING_DEFAULT_LIST_PARAMS,
+  MISSING_LIST_PAGE_SIZE,
+  MIN_SEARCH_LEN,
+  buildMissingUrl,
+} from "@/lib/missing";
+export type {
+  MissingListParams,
+  MissingListResponse,
+  MissingMapMarker,
+  MissingPerson,
+  MissingStats,
+} from "@/lib/missing";
 
 /** queryFn compartido por la query y el prefetch (misma forma → misma entrada
  *  de caché). */
@@ -119,13 +88,8 @@ export function usePrefetchMissingPages() {
   };
 }
 
-/** Stats compartidas (reemplaza el poller de found-count redundante del carousel). */
-export interface MissingStats {
-  active: number;
-  found: number;
-  total: number;
-  onMap: number;
-}
+/** Stats compartidas (reemplaza el poller de found-count redundante del carousel).
+ *  El tipo `MissingStats` vive en lib/missing.ts y se re-exporta arriba. */
 export function useMissingStats(pollMs = 60_000) {
   return useQuery({
     queryKey: qk.missing.stats,

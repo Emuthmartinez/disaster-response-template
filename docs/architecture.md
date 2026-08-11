@@ -6,6 +6,18 @@ asume ningún país, evento u organización — la identidad de cada despliegue
 `config/deployment.config.json` y en variables de entorno (`.env.example`),
 nunca en código.
 
+**Dos topologías de despliegue soportan el mismo código de aplicación**, sin
+fork del repo — ver `CLAUDE.md` → "Dos caminos de despliegue" para cuál
+elegir y `## Despliegue` más abajo para el detalle técnico de cada una:
+
+| | Camino A — Cloudflare Workers (primario) | Camino B — VPS (alternativo) |
+| --- | --- | --- |
+| Runtime backend/frontend/admin | Workers (`@opennextjs/cloudflare`, `httpServerHandler`) | Node, `docker-compose.prod.yml` |
+| Driver de Postgres | Neon HTTP (sin conexión con estado) | node-postgres (`pg`, pool TCP) |
+| Transacciones interactivas | No soportadas | Soportadas |
+| Jobs de fondo | Cloudflare Queues + Cron Triggers | BullMQ + Valkey |
+| Reverse proxy / TLS | Cloudflare (borde) | Caddy (en el propio VPS) |
+
 ## Resumen
 
 El proyecto es un monorepo con tres servicios de aplicación y una capa de
@@ -167,6 +179,29 @@ Turnstile + rate-limit).
 
 ## Datos y migraciones
 
+### Qué driver de Postgres usar — árbol de decisión
+
+`backend/src/db/index.ts` elige el driver según el runtime, no según una
+variable que configures a mano:
+
+- **¿Corre en un proceso Node normal** (docker compose, el worker BullMQ,
+  o cualquier cosa fuera de un isolate de Workers)**?** → node-postgres
+  (`pg`), con pool TCP con estado. Soporta transacciones interactivas.
+- **¿Corre dentro de un isolate de Cloudflare Workers** (Camino A —
+  frontend/backend/admin desplegados como Worker)**?** → el driver HTTP de
+  Neon, sin conexión con estado. **No** soporta transacciones interactivas.
+
+Esto no es una preferencia de configuración — es una restricción
+arquitectónica de la plataforma: en un Worker, un socket TCP pertenece a la
+petición que lo abrió y no sobrevive entre invocaciones del isolate, así que
+un pool con estado (node-postgres) simplemente no funciona ahí. Intentar
+"arreglarlo" con más reintentos o un pool más chico no cambia esto — solo un
+driver sin estado (HTTP) funciona sobre Workers, y ese driver trae su propia
+limitación (sin transacciones interactivas — ver AGENTS.md → "PROHIBIDO
+`db.transaction`" para los patrones de reemplazo). Inyectar una cadena de
+conexión de pooling local (p.ej. Hyperdrive) en el lugar de una URL HTTP de
+Neon real rompe casi cualquier consulta — no es un atajo válido.
+
 - Postgres es la base de datos de producción, co-ubicada en el mismo VPS por
   defecto (servicio `db` de `docker-compose.prod.yml`) o externa si prefieres.
 - Drizzle vive en `infra/db/schema.ts`; las migraciones versionadas viven en
@@ -191,6 +226,29 @@ Turnstile + rate-limit).
   (`max_slot_wal_keep_size` acota el WAL). Esta réplica es independiente de la
   automatización de firewall específica de un proveedor cloud, que queda
   fuera de esta plantilla (ver "Fuera de esta plantilla" más abajo).
+
+## Fotos y object storage
+
+- Sin object storage configurado, las fotos se sirven directo desde el
+  backend (`R2_*` vacío en `.env.example`). Con R2 (u otro S3-compatible)
+  configurado, las fotos se rehostean ahí y se sirven vía `R2_PUBLIC_BASE`
+  (o el dominio propio que le adjuntes, p.ej. `cdn.example.org`) — ambos
+  caminos coexisten en el mismo código: el path activo depende solo de si
+  las variables `R2_*` están presentes.
+- **Las Cache Rules de zona de Cloudflare son un no-op para un Worker en un
+  dominio propio.** Un Worker desplegado en un dominio personalizado
+  (custom domain) se ejecuta **antes** de la fase de cache de la zona — las
+  reglas de cache configuradas en el dashboard/OpenTofu de Cloudflare para
+  ese dominio nunca llegan a aplicarse a las respuestas del Worker, aunque
+  la configuración se vea correcta y no dé ningún error. Si necesitas cache
+  de borde para fotos servidas por un Worker (Camino A), impleméntala
+  **dentro** del propio Worker con la API `caches.default`, no confiando en
+  una regla de cache de zona.
+- Al agregar cache de borde delante de un endpoint que refleja el `Origin`
+  de la petición en `Access-Control-Allow-Origin` (con `Vary: Origin`),
+  normaliza qué se cachea por origen — un cache de borde que ignora `Vary`
+  puede servirle a un cliente de un origen distinto las cabeceras CORS de
+  otro cliente.
 
 ## Workers y colas
 
@@ -220,8 +278,9 @@ Turnstile + rate-limit).
 - **Sismos** (`earthquakes.queue.ts`): el worker poll-ea un feed público de
   sismos (por defecto el feed realtime del USGS, global) cada
   `EARTHQUAKES_EVERY_MS` (default 60s), filtra al bounding box configurado
-  (`EARTHQUAKES_MIN_LAT`/`MAX_LAT`/`MIN_LNG`/`MAX_LNG`, sin recortar por
-  defecto) y hace upsert por id de evento en la tabla `earthquakes`. Al
+  (`EARTHQUAKES_MIN_LAT`/`MAX_LAT`/`MIN_LNG`/`MAX_LNG` — las 4 son
+  obligatorias, fail-fast si falta alguna; no hay bbox global por defecto)
+  y hace upsert por id de evento en la tabla `earthquakes`. Al
   arrancar, si la tabla está vacía, encola un backfill puntual (últimos
   `EARTHQUAKES_BACKFILL_DAYS` días, una sola llamada). Este scheduler
   **siempre corre** (no va bajo `SYNC_SCHEDULERS`): es dato público y barato.
@@ -229,11 +288,87 @@ Turnstile + rate-limit).
   que el primer deploy siembra solo. La superficie pública es `GET
   /api/earthquakes` (read-only, anónima, cacheada con ETag).
 
+### Camino A: el mismo seam de jobs sobre Cron Triggers + Cloudflare Queues
+
+`backend/worker/**` (BullMQ) no puede correr dentro de un Worker de
+Cloudflare — no hay proceso de larga duración ni conexión sostenida a Redis.
+El Camino A reemplaza cada pieza con su equivalente serverless, sin cambiar
+la firma pública de ningún job:
+
+- **Productor**: `backend/src/lib/job-dispatch.ts` elige transporte por lo
+  que esté realmente registrado — un binding de Queues si existe,
+  `VALKEY_URL` si no — nunca asume uno sobre el otro.
+- **Consumidor**: `backend/src/lib/queue-consumer.ts`, cableado en el
+  handler `queue` de `backend/src/worker.ts`. Ack por mensaje; cartas
+  muertas persistidas en `audit_log`.
+- **Sismos y geocode**: pasan de scheduler-en-proceso a **Cron Triggers**
+  (`backend/src/services/cron-jobs.ts`), con cadencias separadas/offset
+  entre sí para no competir por la misma ventana.
+- **Publicación de necesidades e importación de pacientes**: pasan a
+  **Cloudflare Queues** con DLQ dedicada.
+
+Ver AGENTS.md → "Jobs de fondo" para el contrato completo (límite de
+mensaje, creación de colas antes del primer deploy, por qué `queues` no se
+hereda en `env.staging`).
+
 ## Despliegue
 
-**Producción: un único VPS con docker compose + Caddy.** Runbook paso a paso
-(provisión, hardening, DNS, TLS, smoke checks, backups, actualización y
-rollback): [`docs/deploy-vps.md`](deploy-vps.md).
+Dos topologías soportadas sobre el mismo código — ver `CLAUDE.md` → "Dos
+caminos de despliegue" para cuál elegir.
+
+### Camino A — Cloudflare Workers (primario)
+
+Runbook operativo completo, fase por fase:
+[`docs/runbook-cloudflare-launch.md`](runbook-cloudflare-launch.md).
+
+- `frontend/`, `backend/` y `admin/` se despliegan cada uno como su propio
+  Worker de Cloudflare, vía `@opennextjs/cloudflare` (frontend/admin,
+  Next.js) y `httpServerHandler` de `cloudflare:node` (backend — envuelve la
+  app de Express **sin reescribirla**).
+- Cada paquete trae su propio `wrangler.jsonc` con `compatibility_flags:
+  ["nodejs_compat"]`, alias de esbuild para módulos fuera del paquete
+  (`infra/db/schema.ts`) o que no corren en Workers tal cual
+  (`swagger-ui-express` — ver `backend/src/shims/`), y **nunca** un bloque
+  `routes` (ver `CLAUDE.md` → "Conocimiento operativo" para por qué).
+- Base de datos: Neon Postgres externo, driver HTTP (ver "Qué driver de
+  Postgres usar" arriba).
+- Secretos: Doppler, no `.env` — ver `docs/doppler.md`.
+- Jobs de fondo: Cron Triggers + Cloudflare Queues (ver arriba).
+- Zona de Cloudflare (DNS, anti-suplantación, WAF, cache, rate limit):
+  módulo OpenTofu opcional en `infra/cloudflare/`.
+
+**Base de conocimiento de compatibilidad con Workers**, para cualquier
+código nuevo que vaya a correr ahí (no solo el ya escrito):
+
+- `backend/src/config/env.ts` valida entorno fail-fast con
+  `process.exit(1)` — eso es un no-op en un Worker. Un fallo de validación
+  en Workers no produce el mensaje claro que produce en Node; produce un
+  `TypeError` genérico más adelante. Código de validación que deba correr en
+  ambos runtimes necesita una salida de fallo que funcione en Workers
+  (lanzar, no `process.exit`).
+- Nunca leas variables de entorno en scope de módulo en código alcanzable
+  desde `backend/src/worker.ts` — ver AGENTS.md → "Convenciones de
+  implementación" para el porqué exacto y el patrón correcto.
+- Cualquier dependencia que asuma APIs de Node no shimmeadas por
+  `nodejs_compat` (acceso a filesystem, `process.cpuUsage()`,
+  `fileURLToPath(import.meta.url)` sin verificar, etc.) puede tumbar **cada
+  ruta** del Worker al desplegar, no solo la que la usa — pasa
+  desapercibido en local (Node completo) y solo se ve en producción. Revisa
+  `backend/src/shims/` antes de asumir que una librería nueva necesita un
+  shim propio; puede que ya exista uno.
+- Un `next build` exitoso en local **no** prueba que una ruta funcione en el
+  Worker desplegado — cualquier I/O de filesystem o Node-only dentro de una
+  route (p.ej. leer un asset desde `public/` con `node:fs` en tiempo de
+  request) puede pasar el prerender local (que sí corre sobre Node, con
+  `public/` en disco) y devolver 500 en producción, donde solo el bundle
+  viaja al borde.
+
+### Camino B — VPS (alternativo)
+
+Runbook paso a paso (provisión, hardening, DNS, TLS, smoke checks, backups,
+actualización y rollback): [`docs/deploy-vps.md`](deploy-vps.md). Es el
+único camino donde corre **todo** el sistema sin adaptación: colas BullMQ,
+transacciones interactivas de Postgres, y el panel `admin/`.
 
 - El stack lo define `docker-compose.prod.yml` detrás de `Caddyfile.example`
   (un único Caddy que reverse-proxea a `frontend:3000`, `backend:8080`,
@@ -246,7 +381,8 @@ rollback): [`docs/deploy-vps.md`](deploy-vps.md).
   fotos y, con `NEXT_PUBLIC_ASSET_PREFIX`, los assets estáticos de Next.
 - Cómo desplegar (push-to-deploy, CI/CD, un script manual sobre SSH) queda a
   criterio de quien opere el despliegue; esta plantilla no incluye un
-  workflow de CI/CD por defecto.
+  workflow de CI/CD por defecto para este camino (el Camino A sí trae
+  workflows de GitHub Actions — ver `.github/workflows/deploy-*.yml`).
 
 ### Fuera de esta plantilla (futuro trabajo)
 
@@ -277,4 +413,9 @@ Cada cambio que modifique esta forma del sistema debe actualizar:
 - `.env.example` si cambia el contrato de entorno (grupo correcto, marca
   `[REQ]`/`[OPT]`, placeholder obviamente falso).
 - `docker-compose.yml` / `docker-compose.prod.yml` / `Caddyfile.example` si
-  cambia un servicio, puerto o dominio.
+  cambia un servicio, puerto o dominio (Camino B).
+- `frontend/wrangler.jsonc` / `backend/wrangler.jsonc` / `admin/wrangler.jsonc`,
+  `*/open-next.config.ts`, y `.github/workflows/deploy-*.yml` si cambia un
+  binding, var, flag de compatibilidad, alias de bundling o smoke check
+  (Camino A). El módulo OpenTofu de `infra/cloudflare/` si cambia DNS, WAF,
+  cache o rate limit de la zona.

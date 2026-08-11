@@ -1,0 +1,52 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // CHANGE_ME: nombre real del Worker — ver skill disaster-configure.
+  "name": "ejemplo-emergencia-admin",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  // El dominio propio (admin.mapa.example.org, ver
+  // config/deployment.config.json → domains.admin) se adjunta por la API de
+  // cuenta (/accounts/{id}/workers/domains), IGUAL que web y api.
+  //
+  // NO declarar `routes` aquí: con `routes`, wrangler llama además a
+  // /zones/{id}/workers/routes, para lo que un token de cuenta (sin permiso de
+  // zona) no tiene alcance, y el fallo aborta el deploy DESPUÉS de subir el
+  // código y ANTES de promover la versión (el Worker se queda sirviendo la
+  // build anterior y el comando parece casi correcto).
+  "observability": {
+    "enabled": true
+  },
+  // El BFF solo necesita saber dónde vive la API; no hay secretos de runtime
+  // en este Worker — la sesión es el JWT del backend en cookie httpOnly,
+  // firmado por la API. Ver admin/src/shared/auth/session-cookie.ts.
+  "vars": {
+    "EMERGENCY_API_URL": "https://api.mapa.example.org"
+  },
+  // Staging: Worker aparte, dominio aparte (admin-staging), API de staging.
+  // Mismo fichero a propósito — igual patrón que frontend/wrangler.jsonc y
+  // backend/wrangler.jsonc: un staging configurado en otro sitio deja de
+  // parecerse a producción, y entonces no prueba nada.
+  "env": {
+    "staging": {
+      // CHANGE_ME: nombre real del Worker de staging — ver disaster-configure.
+      "name": "ejemplo-emergencia-admin-staging",
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": ["nodejs_compat"],
+      "assets": {
+        "directory": ".open-next/assets",
+        "binding": "ASSETS"
+      },
+      "observability": {
+        "enabled": true
+      },
+      "vars": {
+        "EMERGENCY_API_URL": "https://api-staging.mapa.example.org"
+      }
+    }
+  }
+}

@@ -1,0 +1,201 @@
+name: Deploy frontend
+
+# Despliega SOLO el frontend (Cloudflare Workers, vía @opennextjs/cloudflare).
+#
+# El backend NO se toca aquí. Vive en su propio Worker y en su propio
+# workflow (deploy-backend.yml), que además es MANUAL. Trabajar en frontend/
+# y hacer push a main nunca redespliega la API.
+#
+# El disparo va con lista de rutas: si un commit solo toca backend/ o docs/,
+# este workflow ni siquiera arranca.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      # La identidad del despliegue se INLINEA en el build del frontend
+      # (lib/deployment-config.ts), así que cambiarla obliga a reconstruir.
+      - "config/deployment.config.json"
+      - ".github/workflows/deploy-frontend.yml"
+  # Para redesplegar sin tener que tocar un fichero (p.ej. tras rotar en
+  # Doppler un secreto que el build necesita).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un despliegue a la vez. `cancel-in-progress: false` A PROPÓSITO: wrangler
+# sube el código y PROMUEVE la versión en dos pasos separados; cortar un
+# deploy a medias puede dejar el Worker con código nuevo subido pero sin
+# promover (o la versión anterior sirviendo tráfico de forma inconsistente)
+# — justo el estado que este flag evita, a costa de que un segundo push
+# espere a que el primero termine en vez de cancelarlo.
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  # Bloqueante: si el frontend no tipa, no tiene sentido gastar minutos
+  # construyendo para Workers. Separado de `deploy` para que un fallo de
+  # tipos aparezca como su propio job en rojo, no enterrado en mitad del log
+  # de build de OpenNext.
+  typecheck:
+    name: Typecheck (bloqueante)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+  deploy:
+    name: Build y deploy del frontend
+    needs: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Único origen de secretos: Doppler. Este workflow solo conoce
+      # DOPPLER_TOKEN (secret de GitHub); `doppler run` inyecta el resto
+      # (site key de Turnstile, URL de la API, credenciales de Cloudflare)
+      # justo antes de cada comando que los necesita — nunca quedan en el
+      # `env:` del job ni en los logs.
+      - name: Instalar Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      - name: Instalar dependencias
+        working-directory: frontend
+        run: npm ci
+
+      # El prebuild de este paquete necesita config/deployment.config.json
+      # dentro de frontend/ para que el bundler resuelva el import (ver
+      # frontend/AGENTS.md / lib/deployment-config.ts) — sin esa copia el
+      # build falla igual que en Docker (ver frontend/Dockerfile).
+      #
+      # APP_BUILD_SHA fija el build id (ver next.config.ts
+      # generateBuildId/deploymentId): sin esto el build cae a "dev" y el
+      # fingerprint que compara el smoke check de abajo no puede distinguir
+      # un deploy nuevo de uno viejo.
+      - name: Build (OpenNext -> Workers)
+        working-directory: frontend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          APP_BUILD_SHA: ${{ github.sha }}
+        run: doppler run -- npx opennextjs-cloudflare build
+
+      # CLOUDFLARE_API_TOKEN es el nombre que espera wrangler; en Doppler el
+      # token con permisos de Workers debe llamarse
+      # CLOUDFLARE_ACCOUNT_API_TOKEN (un token de ZONA, con permisos de
+      # DNS/WAF, NO puede desplegar Workers — son alcances complementarios,
+      # ninguno de los dos basta solo).
+      #
+      # Los dominios propios (apex + www) se adjuntan por la API de cuenta y
+      # NO se declaran en wrangler.jsonc como `routes`: al declararlos,
+      # wrangler llama además a /zones/{id}/workers/routes, para lo que este
+      # token no tiene permiso de zona, y el fallo aborta el deploy DESPUÉS
+      # de subir el código pero ANTES de promover la versión (el Worker se
+      # queda sirviendo el build anterior y el comando parece casi correcto).
+      - name: Deploy a Cloudflare Workers
+        working-directory: frontend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          doppler run --command '
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ACCOUNT_API_TOKEN" \
+            CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+            npx wrangler deploy --old-asset-ttl 86400'
+
+      # Smoke check post-deploy. No solo "responde 200":
+      #   (a) el HTML servido lleva el fingerprint de ESTE build, no uno
+      #       cacheado por el edge — ver dpl=<APP_BUILD_SHA> más abajo;
+      #   (b) la imagen social (next/og) y el manifest PWA responden — son
+      #       rutas que solo tienen sentido si el build recién subido está
+      #       sirviendo de verdad, no solo la home cacheada;
+      #   (c) cache-busting en cada intento + reintentos espaciados: el edge
+      #       de Cloudflare puede tardar unos segundos en propagar un deploy
+      #       nuevo, y sin cache-busting un proxy intermedio puede devolver
+      #       una copia de un intento anterior en vez de ir de verdad al
+      #       origen (ver notas de despliegue sobre cache ocultando deploys
+      #       frescos).
+      - name: Smoke check post-deploy
+        run: |
+          set -euo pipefail
+          WEB_DOMAIN="$(jq -r '.domains.web' config/deployment.config.json)"
+          BASE_URL="https://${WEB_DOMAIN}"
+          echo "Verificando ${BASE_URL} (fingerprint esperado: dpl=${GITHUB_SHA})"
+
+          fingerprint_ok=0
+          for i in $(seq 1 15); do
+            cb="$(date +%s)-${i}-${RANDOM}"
+            code=$(curl -sS -o /tmp/home.html -w "%{http_code}" --max-time 30 "${BASE_URL}/?_cb=${cb}" || echo 000)
+            echo "intento ${i} -> HTTP ${code}"
+            if [ "$code" = "200" ]; then
+              # next.config.ts fija deploymentId=APP_BUILD_SHA: Next.js añade
+              # ?dpl=<deploymentId> a cada asset estático referenciado en el
+              # HTML servido (mecanismo nativo de Next contra version-skew).
+              # Si el dpl que vemos no es el SHA que acabamos de desplegar,
+              # el edge todavía sirve el build anterior.
+              served_dpl="$(grep -o 'dpl=[0-9a-f]\{7,40\}' /tmp/home.html | head -1 | cut -d= -f2 || true)"
+              if [ "${served_dpl:-}" = "$GITHUB_SHA" ]; then
+                echo "Fingerprint de build OK: dpl=${served_dpl}"
+                fingerprint_ok=1
+                break
+              fi
+              echo "  dpl servido: '${served_dpl:-<ninguno>}' (todavía no es ${GITHUB_SHA} — el edge puede tardar en propagar)"
+            fi
+            sleep 10
+          done
+
+          if [ "$fingerprint_ok" != "1" ]; then
+            echo "::error::El sitio no sirvió el build recién desplegado (dpl=${GITHUB_SHA}) tras 15 intentos con cache-busting."
+            exit 1
+          fi
+
+          check_route() {
+            path="$1"
+            cb="$(date +%s)-${RANDOM}"
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 "${BASE_URL}${path}?_cb=${cb}" || echo 000)
+            echo "${path} -> HTTP ${code}"
+            [ "$code" = "200" ]
+          }
+
+          ok=1
+          check_route "/opengraph-image" || ok=0
+          check_route "/manifest.webmanifest" || ok=0
+
+          if [ "$ok" != "1" ]; then
+            echo "::error::La imagen social (next/og) o el manifest PWA no respondieron 200 tras el deploy."
+            exit 1
+          fi
+
+          echo "Smoke check OK."

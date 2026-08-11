@@ -155,3 +155,59 @@ describe("supresión permanente", () => {
     expect(suppressions[0]).toMatchObject({ source, externalId });
   });
 });
+
+describe("GET /api/missing/:id/photo — cabeceras uniformes", () => {
+  // Regresión: el cors() global refleja el Origin del request (Vary: Origin),
+  // pero el borde de Cloudflare ignora Vary al cachear: la copia cacheada
+  // llevaría el ACAO de quien pidió primero. Las fotos deben responder
+  // SIEMPRE con ACAO `*`, sin credenciales y sin Vary, para ser cacheables.
+  it("sirve la foto con ACAO * aunque el request no lleve Origin", async () => {
+    const person = syntheticPerson();
+    const created = await request(app).post("/api/missing").send(person);
+    expect(created.status).toBe(201);
+    const id = created.body.person.id as string;
+
+    const res = await request(app).get(`/api/missing/${id}/photo`);
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBe("*");
+    expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+    expect(res.headers["vary"]).toBeUndefined();
+    expect(res.headers["cache-control"]).toContain("immutable");
+  });
+
+  it("mantiene ACAO * también con un Origin cross-site en el request", async () => {
+    const person = syntheticPerson();
+    const created = await request(app).post("/api/missing").send(person);
+    const id = created.body.person.id as string;
+
+    const res = await request(app)
+      .get(`/api/missing/${id}/photo`)
+      .set("Origin", "https://example.org");
+    expect(res.status).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBe("*");
+  });
+});
+
+describe("GET /api/missing/:id/photo con photo_external_url", () => {
+  // Regresión: fetchExternalPhoto sin try/catch convertía cualquier fallo de
+  // red (host caído, DNS, timeout) en un 500 sin manejar. El contrato es el
+  // mismo que el de las demás ramas sin foto: 404 limpio.
+  it("responde 404 (no 500) si la fuente externa no responde", async () => {
+    const { _tag, photo: _photo, ...body } = syntheticPerson();
+    const created = await request(app).post("/api/missing").send(body);
+    expect(created.status).toBe(201);
+    const id = created.body.person.id as string;
+
+    // photo_external_url no tiene camino de escritura público (solo el motor
+    // de sync externo lo puebla); se siembra directo en la fila sintética.
+    // 127.0.0.1:9 (discard): conexión rechazada al instante, sin esperar timeout.
+    const db = await getDb();
+    await db
+      .update(schema.missingPersons)
+      .set({ photoExternalUrl: "http://127.0.0.1:9/foto-inexistente.jpg" })
+      .where(eq(schema.missingPersons.id, id));
+
+    const res = await request(app).get(`/api/missing/${id}/photo`);
+    expect(res.status).toBe(404);
+  });
+});

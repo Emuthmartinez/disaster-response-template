@@ -19,6 +19,18 @@ const AI_TRAINING_BOTS = [
   "Amazonbot",
   "Applebot-Extended",
   "meta-externalagent",
+  "cohere-ai",
+];
+
+/** Live retrieval / search agents — explicit Allow documents intent (also covered by `*`). */
+const AI_RETRIEVAL_BOTS = [
+  "OAI-SearchBot",
+  "ChatGPT-User",
+  "PerplexityBot",
+  "Perplexity-User",
+  "Claude-User",
+  "Claude-Web",
+  "Googlebot",
 ];
 
 export default function robots(): MetadataRoute.Robots {
@@ -32,6 +44,11 @@ export default function robots(): MetadataRoute.Robots {
         allow: "/",
         disallow: ["/api/"],
       },
+      ...AI_RETRIEVAL_BOTS.map((userAgent) => ({
+        userAgent,
+        allow: "/",
+        disallow: ["/api/"],
+      })),
       ...AI_TRAINING_BOTS.map((userAgent) => ({
         userAgent,
         disallow: "/",

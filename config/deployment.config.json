@@ -6,6 +6,7 @@
   "regionLabel": "Región Ejemplo",
   "mapCenter": [19.4326, -99.1332],
   "mapZoom": 12,
+  "mapBbox": [14, -106, 24, -92],
   "languageTag": "es",
   "contactEmail": "contacto@example.org",
   "domains": {

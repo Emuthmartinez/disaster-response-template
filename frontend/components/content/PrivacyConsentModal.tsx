@@ -13,11 +13,14 @@ const SCROLL_THRESHOLD_PX = 48;
 type PrivacyConsentModalProps = {
   open: boolean;
   onAccept: () => void;
+  /** Cerrar sin aceptar. El envio que lo pidio se cancela. */
+  onDismiss: () => void;
 };
 
 export default function PrivacyConsentModal({
   open,
   onAccept,
+  onDismiss,
 }: PrivacyConsentModalProps) {
   const titleId = useId();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -45,6 +48,17 @@ export default function PrivacyConsentModal({
     ro.observe(el);
     return () => ro.disconnect();
   }, [open, checkScrollEnd]);
+
+  // Escape cancela. Antes no aplicaba porque el modal era ineludible; ahora es
+  // una decision del usuario y debe poder salirse sin aceptar.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onDismiss();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onDismiss]);
 
   if (!mounted || !open) return null;
 
@@ -91,6 +105,13 @@ export default function PrivacyConsentModal({
               aceptar.
             </p>
           )}
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="mb-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+          >
+            Ahora no
+          </button>
           <button
             type="button"
             disabled={!canAccept}

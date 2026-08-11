@@ -1,14 +1,58 @@
 ---
 name: disaster-deploy-vps
-description: Levanta la plantilla end-to-end en un VPS Ubuntu limpio -- usuario de deploy + hardening SSH, UFW, fail2ban, Docker, clona el repo del deployer, corre disaster-secrets-bootstrap si falta, docker compose -f docker-compose.prod.yml up -d, TLS con Caddy sobre los dominios reales (con el paso de DNS), y smoke checks. Requiere que disaster-configure, disaster-brand y disaster-secrets-bootstrap ya hayan corrido.
+description: Levanta la plantilla end-to-end en un VPS Ubuntu limpio -- usuario de deploy + hardening SSH, UFW, fail2ban, Docker, clona el repo del deployer, corre disaster-secrets-bootstrap si falta, docker compose -f docker-compose.prod.yml up -d, TLS con Caddy sobre los dominios reales (con el paso de DNS), y smoke checks. Camino ALTERNATIVO de despliegue (disaster-deploy-cloudflare es el primario) — el único donde transacciones interactivas de Drizzle y el worker BullMQ/Valkey funcionan sin reescribir nada. Empieza con un guard de estado en vivo: si los dominios ya sirven un despliegue real, STOP antes de tocar DNS. Requiere que disaster-configure, disaster-brand y disaster-secrets-bootstrap (variante .env) ya hayan corrido.
 ---
 
 # disaster-deploy-vps
 
-Último paso técnico del standup, antes de `disaster-content-audit`. Deja el
-sitio corriendo en un único VPS con `docker-compose.prod.yml` + Caddy, según
-lo documentado en `docs/architecture.md` (sección "Despliegue") y la cabecera
-de `docker-compose.prod.yml`.
+Camino **alternativo** de despliegue de este template — `disaster-deploy-cloudflare`
+(Cloudflare Workers + Neon + Doppler) es el camino primario para un
+lanzamiento nuevo. Este camino sigue siendo el completo/de referencia y es
+el ÚNICO de los dos donde las transacciones interactivas de Drizzle
+(`db.transaction(...)`, usadas en `roles.ts`/`patient-imports`) y el worker
+de colas BullMQ/Valkey (`backend/worker/`) funcionan tal cual, sin
+reescribir nada — si tu fork necesita esas dos cosas sin adaptarlas, este es
+el camino, no una alternativa de segunda categoría.
+
+Deja el sitio corriendo en un único VPS con `docker-compose.prod.yml` +
+Caddy, según lo documentado en `docs/architecture.md` (sección
+"Despliegue") y la cabecera de `docker-compose.prod.yml`. Último paso
+técnico del standup en este camino, antes de `disaster-content-audit`.
+
+## Guard de estado en vivo — antes de tocar DNS, siempre
+
+**No asumas que los dominios de `deployment.config.json` están libres.**
+Repetir el standup de este skill sobre un fork cuyo dominio YA sirve un
+despliegue real —este mismo camino u otro, Cloudflare Workers u otro VPS—
+y crear los registros A del paso 4 más abajo apunta el tráfico de
+producción a un VPS a medio construir, silenciosamente, sin que nada avise.
+Antes de crear cualquier registro DNS:
+
+```bash
+dig +short <domains.web>
+dig +short <domains.api>
+curl -sI "https://<domains.web>" | head -5
+```
+
+**Detente y confirma con el deployer antes de seguir si:**
+- `dig` ya devuelve una IP (cualquiera, no solo la de un VPS tuyo) para
+  alguno de los tres dominios.
+- El `curl` devuelve un `200`/`30x` con contenido que no es un placeholder
+  obvio de registrador ("dominio en venta", parking page) — eso es un sitio
+  real sirviendo tráfico HOY.
+- El deployer dijo "ya desplegamos esto antes" en cualquier forma — verifica
+  tú mismo con los comandos de arriba en vez de confiar en la afirmación;
+  una re-ejecución de standup sobre un despliegue que en realidad SÍ está
+  vivo (aunque el propio equipo lo haya olvidado, o esté en otro camino
+  como `disaster-deploy-cloudflare`) es exactamente el escenario que este
+  guard existe para atrapar.
+
+Si cualquiera de estas señales aparece, no continúes "solo para probar" —
+pregunta explícitamente si el objetivo es (a) un despliegue nuevo sobre un
+dominio realmente libre, o (b) una migración deliberada de un despliegue
+existente a este VPS, que necesita su propio plan de corte (ver la nota de
+`ssl_mode`/orden de aplicación en `infra/cloudflare/README.md` si ese
+dominio ya está detrás de Cloudflare) — nunca lo decidas tú por tu cuenta.
 
 ## Prerequisitos (gate — verifica antes de tocar el VPS)
 
@@ -193,6 +237,9 @@ autorización explícita del deployer para descartar datos.
 ## Hard stop
 
 No anuncies el despliegue como listo si:
+- El guard de estado en vivo de arriba mostró señales de un despliegue real
+  ya existente y no lo resolviste explícitamente con el deployer antes de
+  tocar DNS.
 - Cualquier prerequisito (`disaster-configure`/`disaster-brand`/
   `disaster-secrets-bootstrap`) no corrió.
 - Algún smoke check de arriba falla.

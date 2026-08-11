@@ -7,6 +7,7 @@ import { trackEvent } from "@/lib/openpanel";
 import { useTurnstile } from "@/hooks/useTurnstile";
 import { usePhotoUpload } from "@/hooks/usePhotoUpload";
 import { copyFor } from "./report-form-helpers";
+import { usePrivacyConsent } from "@/components/layout/PrivacyConsentGate";
 
 interface ReportFormProps {
   /** Ubicación elegida, o null mientras el usuario aún no la define. */
@@ -40,6 +41,7 @@ export default function ReportForm({
   onClearLocation,
   onSubmit,
 }: ReportFormProps) {
+  const { ensureConsent } = usePrivacyConsent();
   const dialogRef = useRef<HTMLDivElement>(null);
   const { mountRef: turnstileMount, getToken: turnstileGetToken } = useTurnstile();
   // Al abrir (o al volver de "elegir en el mapa") movemos el foco al modal para
@@ -90,6 +92,10 @@ export default function ReportForm({
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+
+    // Consentimiento ANTES de enviar datos personales. Si la persona no acepta,
+    // no se envia nada. Ver components/layout/PrivacyConsentGate.tsx.
+    if (!(await ensureConsent())) return;
     setError(null);
     if (!coords) {
       setError(

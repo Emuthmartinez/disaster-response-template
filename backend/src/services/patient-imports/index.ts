@@ -8,7 +8,7 @@ export {
 	setImportJob,
 } from "./create";
 export type { OcrIngestDeps } from "./ingest";
-export { ingestFileImport, ingestOcrImport } from "./ingest";
+export { ingestFileImport, ingestOcrImport, stageFileRows } from "./ingest";
 export type { ProcessImportOptions } from "./process";
 export { processImport } from "./process";
 export type {

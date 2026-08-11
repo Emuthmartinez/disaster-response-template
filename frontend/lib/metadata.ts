@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { SITE_NAME } from "@/lib/site";
+import { OG_IMAGE_PATH, ogImageMeta } from "@/lib/og-image";
 
 interface PageMetadataInput {
   title: string;
@@ -15,6 +16,10 @@ export function pageMetadata({
   index = true,
 }: PageMetadataInput): Metadata {
   const fullTitle = `${title} · ${SITE_NAME}`;
+  // Images explícitas: un objeto `openGraph` parcial en una página interna
+  // REEMPLAZA el de app/layout.tsx en vez de fusionarse con él, así que sin
+  // esto las páginas interiores perdían la tarjeta social.
+  const socialImages = [ogImageMeta(fullTitle)];
   const meta: Metadata = {
     title: { absolute: fullTitle },
     description,
@@ -22,15 +27,14 @@ export function pageMetadata({
       title: fullTitle,
       description,
       type: "website",
-      // Sin `images`: hereda la imagen generada por app/opengraph-image.tsx
-      // (convención de archivo de Next.js) en vez de un binario estático.
+      images: socialImages,
       ...(path ? { url: path } : {}),
     },
     twitter: {
       card: "summary_large_image",
       title: fullTitle,
       description,
-      // Sin `images`: hereda app/twitter-image.tsx.
+      images: [OG_IMAGE_PATH],
     },
   };
   if (path) meta.alternates = { canonical: path };

@@ -159,8 +159,12 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      # Raíz del repo, NO ./frontend: frontend/lib/deployment-config.ts importa
+      # ../../config/deployment.config.json (fuera de frontend/), y con
+      # context: ./frontend Docker nunca puede copiar ese fichero al build
+      # (COPY no puede alcanzar rutas fuera de su contexto). Ver frontend/Dockerfile.
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         # URL absoluta del backend para el BROWSER (no la red de Docker).
         NEXT_PUBLIC_API_URL: "http://localhost:8080"

@@ -21,7 +21,23 @@ export const register = new Registry();
 
 // Métricas por defecto del proceso/runtime (heap de V8, event-loop lag, CPU,
 // GC, handles…). Útiles para vigilar salud del pod, no solo el HTTP.
-collectDefaultMetrics({ register });
+//
+// En Cloudflare Workers esto NO puede correr: prom-client llama a
+// `process.cpuUsage()`, que el runtime no implementa y lanza. Como la llamada
+// está en ámbito de módulo, la excepción se propagaba por el import de
+// server.ts y tumbaba la API ENTERA (todo a 1101, no solo /metrics).
+//
+// Se envuelve en try/catch en vez de detectar el runtime: lo que importa no es
+// dónde corremos, sino si estas métricas se pueden recolectar. Las métricas
+// HTTP de abajo (que son las que miramos) siguen funcionando en ambos sitios.
+try {
+  collectDefaultMetrics({ register });
+} catch (err) {
+  console.warn(
+    "[metrics] métricas por defecto del runtime no disponibles:",
+    err instanceof Error ? err.message : err,
+  );
+}
 
 const LABELS = ["method", "route", "status_code"] as const;
 

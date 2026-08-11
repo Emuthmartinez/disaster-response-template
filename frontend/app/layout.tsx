@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Nunito, Source_Sans_3 } from "next/font/google";
+import localFont from "next/font/local";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import "./globals.css";
 import PwaRegister from "@/components/layout/PwaRegister";
@@ -8,22 +8,52 @@ import OpenPanelProduction from "@/components/layout/OpenPanelProduction";
 import ThemeProvider from "@/components/layout/ThemeProvider";
 import QueryProvider from "@/components/layout/QueryProvider";
 import { JsonLd } from "@/components/seo/JsonLd";
-import { graph, organizationSchema, ORG_ID, WEBSITE_ID } from "@/lib/jsonld";
-import { SITE_URL, SITE_LOGO, SITE_NAME, SITE_PRODUCT_NAME, SITE_BRAND_NAME } from "@/lib/site";
+import {
+  graph,
+  organizationSchema,
+  websiteSchema,
+  ORG_ID,
+} from "@/lib/jsonld";
+import { SITE_URL, SITE_NAME, SITE_PRODUCT_NAME, SITE_BRAND_NAME } from "@/lib/site";
 import { deploymentConfig } from "@/lib/deployment-config";
+import { ogImageMeta } from "@/lib/og-image";
 
-const nunito = Nunito({
-  subsets: ["latin"],
-  weight: ["800", "900"],
+// Tipografías AUTO-ALOJADAS (ver app/fonts/README.md).
+//
+// Antes esto era `next/font/google`, que descarga los .woff2 desde Google en
+// tiempo de BUILD. Un fallo de red transitorio rompe el build entero: pasó de
+// verdad en un deployment real de este template (un run de CI falló con un
+// error de módulo apuntando a la fuente de Google Fonts, y el mismo commit
+// re-ejecutado sin tocar una línea pasó limpio). Si tu pipeline despliega a
+// producción en cada push a `main` (el target por defecto en Cloudflare
+// Workers, ver wrangler.jsonc), ese parpadeo de red tumba un despliegue de
+// producción con una traza que parece un error de código. Con los ficheros
+// versionados en app/fonts/, `next build` no habla con la red.
+//
+// Los nombres de las variables CSS (--font-display/--font-body) NO cambian:
+// globals.css los consume y no hace falta tocar nada allí.
+//
+// `adjustFontFallback: "Arial"` es la capa anti-CLS: Next lee las métricas
+// del fichero y genera un @font-face de fallback con ascent/descent/size-adjust
+// ajustados, igual que hacía la versión de Google.
+const nunito = localFont({
+  // Variable (tiene tabla `fvar`): UN fichero cubre todo el rango de pesos,
+  // por eso `weight` es un rango y no una lista.
+  src: "./fonts/nunito-latin-variable.woff2",
+  weight: "800 900",
+  style: "normal",
   variable: "--font-display",
   display: "swap",
+  adjustFontFallback: "Arial",
 });
 
-const sourceSans = Source_Sans_3({
-  subsets: ["latin"],
-  weight: ["400", "600", "700"],
+const sourceSans = localFont({
+  src: "./fonts/source-sans-3-latin-variable.woff2",
+  weight: "400 700",
+  style: "normal",
   variable: "--font-body",
   display: "swap",
+  adjustFontFallback: "Arial",
 });
 
 const SITE_TITLE = `${SITE_PRODUCT_NAME} · ${SITE_BRAND_NAME}`;
@@ -32,7 +62,9 @@ const SITE_DESC =
 const OPENPANEL_CLIENT_ID = process.env.NEXT_PUBLIC_OPENPANEL_CLIENT_ID;
 // Google Analytics es opcional: sin ID configurado, el componente no se
 // renderiza (ni el script se carga) en vez de reportar a una propiedad GA
-// hardcodeada del deployment de origen.
+// hardcodeada del deployment de origen. NUNCA pongas un ID real de fallback
+// aquí — un fork que olvide configurar la env var reportaría su tráfico a la
+// propiedad de otro deployment.
 const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
 
 // Orígenes cross-origin que el navegador SIEMPRE golpea: el backend (datos de
@@ -60,10 +92,23 @@ export const metadata: Metadata = {
   description: SITE_DESC,
   applicationName: SITE_NAME,
   manifest: "/manifest.webmanifest",
+  // Set completo de rasters (favicon.ico/32/64, apple-touch-icon, icon-192/512)
+  // ademas del SVG: iOS "añadir a inicio", varios launchers de Android y
+  // algunos crawlers/previews sociales no leen SVG de forma fiable.
+  // scripts/generate-icons.mjs genera este set a partir de app/icon.svg — si
+  // no se ha corrido todavía, estas entradas apuntan a ficheros ausentes y el
+  // navegador cae al siguiente icono declarado (o al SVG de abajo).
   icons: {
-    icon: [{ url: SITE_LOGO, type: "image/svg+xml" }],
-    shortcut: SITE_LOGO,
-    apple: SITE_LOGO,
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon-64.png", sizes: "64x64", type: "image/png" },
+    ],
+    shortcut: [{ url: "/favicon.ico", sizes: "any" }],
+    apple: [
+      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
   },
   keywords: [
     "emergencia",
@@ -82,11 +127,15 @@ export const metadata: Metadata = {
     description: SITE_DESC,
     locale: deploymentConfig.languageTag.replace("-", "_"),
     url: SITE_URL,
+    images: [ogImageMeta(`${SITE_PRODUCT_NAME} · ${SITE_BRAND_NAME} — mapa y reportes ciudadanos`)],
   },
   twitter: {
     card: "summary_large_image",
     title: SITE_TITLE,
     description: SITE_DESC,
+    images: [
+      ogImageMeta(`${SITE_PRODUCT_NAME} · ${SITE_BRAND_NAME} — mapa y reportes ciudadanos`).url,
+    ],
   },
 };
 
@@ -107,15 +156,7 @@ export default function RootLayout({
 }>) {
   const jsonLd = graph(
     organizationSchema(),
-    {
-      "@type": "WebSite",
-      "@id": WEBSITE_ID,
-      name: SITE_NAME,
-      url: SITE_URL,
-      inLanguage: deploymentConfig.languageTag,
-      description: SITE_DESC,
-      publisher: { "@id": ORG_ID },
-    },
+    websiteSchema(SITE_DESC),
     {
       "@type": "EmergencyService",
       name: "Plataforma ciudadana de coordinación de rescate",

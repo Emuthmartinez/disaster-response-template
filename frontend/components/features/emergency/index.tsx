@@ -14,12 +14,14 @@ import { qk } from "@/lib/query-keys";
 import {
   useReports,
   useMissingMap,
+  useEarthquakes,
   useConfirmReport,
   useResolveReport,
   type ReportsResponse,
 } from "@/hooks/emergency";
+import { usePetsMap } from "@/hooks/pets";
 import { useLowBandwidthMode } from "@/hooks/useLowBandwidthMode";
-import { useMissingStats } from "@/hooks/useMissingStats";
+import { useMissingStats } from "@/hooks/missing";
 import type { MapBounds } from "@/components/features/map";
 import type { GeocodeResult } from "@/components/features/emergency/AddressSearch";
 import {
@@ -46,6 +48,16 @@ const AFFECTED_CENTER: { lat: number; lng: number } = {
   lat: DEFAULT_MAP_CENTER[0],
   lng: DEFAULT_MAP_CENTER[1],
 };
+// Encuadre inicial opcional (config/deployment.config.json → mapBbox), p.ej.
+// el epicentro + su área de impacto en vez de solo un punto. Sin mapBbox
+// configurado, el mapa sigue usando DEFAULT_MAP_CENTER + mapZoom como siempre.
+const INITIAL_MAP_BOUNDS: [[number, number], [number, number]] | undefined =
+  deploymentConfig.mapBbox
+    ? [
+        [deploymentConfig.mapBbox[0], deploymentConfig.mapBbox[1]],
+        [deploymentConfig.mapBbox[2], deploymentConfig.mapBbox[3]],
+      ]
+    : undefined;
 const POLL_INTERVAL_MS = 5000;
 const LOW_BANDWIDTH_POLL_INTERVAL_MS = 30_000;
 const ADMIN_STORAGE_KEY = "emergency:adminToken";
@@ -72,10 +84,20 @@ export default function EmergencyApp() {
   const [debouncedBounds, setDebouncedBounds] = useState<MapBounds | null>(null);
   const boundsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const missingMapQuery = useMissingMap(debouncedBounds);
+  // Mismo queryKey que EarthquakesPanel: TanStack deduplica por clave,
+  // asi que tener dos consumidores no dispara una segunda peticion.
+  const { data: earthquakes } = useEarthquakes(60_000);
   const missingMapMarkers = useMemo(
     () => missingMapQuery.data ?? [],
     [missingMapQuery.data],
   );
+  // Mascotas: query y capa APARTE de las personas (endpoint y tabla propios).
+  const petsMapQuery = usePetsMap(debouncedBounds);
+  const petMapMarkers = useMemo(() => petsMapQuery.data ?? [], [petsMapQuery.data]);
+  // Visibles por defecto: la capa solo se pinta si hay marcadores, así que
+  // encenderla no añade ruido cuando todavía no hay mascotas reportadas.
+  const [showPetsOnMap, setShowPetsOnMap] = useState(true);
+  const togglePets = useCallback(() => setShowPetsOnMap((v) => !v), []);
 
   const confirmMutation = useConfirmReport();
   const resolveMutation = useResolveReport();
@@ -146,9 +168,10 @@ export default function EmergencyApp() {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
     return { lat, lng, ts: Date.now() };
   });
-  // Store compartido: un solo poll de /api/missing/stats para toda la página
-  // (la navbar también lo usa).
-  const missingStats = useMissingStats();
+  // Query compartida (qk.missing.stats): un solo poll de /api/missing/stats para
+  // toda la página — la navbar y el carousel usan la MISMA clave, así que
+  // TanStack dedup a un único request y una única entrada de caché.
+  const missingStats = useMissingStats().data ?? null;
 
   const isAdmin = Boolean(adminToken);
 
@@ -570,14 +593,19 @@ export default function EmergencyApp() {
       <div className={`e-map-grid ${placing ? "is-placing" : ""}`}>
         <MapPanel
           mapReports={mapReports}
+          earthquakes={earthquakes ?? []}
           missingMapMarkers={missingMapMarkers}
           showMissingOnMap={showMissingOnMap}
+          petMapMarkers={petMapMarkers}
+          showPetsOnMap={showPetsOnMap}
+          onTogglePets={togglePets}
           draft={draft}
           confirmed={confirmed}
           isAdmin={isAdmin}
           focus={focus}
           fitRequest={fitRequest}
           center={DEFAULT_MAP_CENTER}
+          initialBounds={INITIAL_MAP_BOUNDS}
           selectedTypes={selectedTypes}
           counts={counts}
           addressBias={

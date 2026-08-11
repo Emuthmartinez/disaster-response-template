@@ -15,6 +15,7 @@
 import { Queue, type JobsOptions } from "bullmq";
 import IORedis from "ioredis";
 import { env } from "@/config/env";
+import { getQueueProducer } from "@/lib/job-dispatch";
 
 const PREFIX = env.QUEUE_PREFIX;
 const SOURCES_SYNC_QUEUE = "sources-sync";
@@ -196,10 +197,32 @@ export interface PatientImportJobData {
  * jobId para trazabilidad. Para CSV/XLSX, el archivo base64 viaja solo en el
  * payload del job y el worker lo materializa en staging.
  */
+/** Binding de Cloudflare Queues para importaciones (wrangler.jsonc). */
+export const PATIENT_IMPORTS_BINDING = "IMPORTS_QUEUE";
+
 export async function enqueuePatientImport(
   data: PatientImportJobData,
   opts?: JobsOptions,
 ): Promise<string> {
+  // Seam de transporte, mismo criterio que lib/job-dispatch: un binding de
+  // Cloudflare Queues gana; BullMQ es el camino compose. Inline aquí (y no vía
+  // dispatchJob) para conservar intactas las opciones BullMQ (jobId
+  // determinista, backoff, removeOn*) del camino compose.
+  const producer = getQueueProducer(PATIENT_IMPORTS_BINDING);
+  if (producer) {
+    let payload: PatientImportJobData = data;
+    if (data.fileBase64 !== undefined && data.contentType !== undefined) {
+      // Límite de 128 KB por mensaje en Queues: el archivo NO viaja en el
+      // mensaje. Se materializan las filas aquí (mismo resultado que haría el
+      // worker de BullMQ) y se encola solo el process.
+      const { stageFileRows } = await import("@/services/patient-imports");
+      await stageFileRows(data.importId, data.contentType, data.fileBase64);
+      payload = { importId: data.importId, mode: "process" };
+    }
+    await producer.send(payload);
+    return `pimport-${data.mode}-${data.importId}`;
+  }
+
   const job = await queue(PATIENT_IMPORTS_QUEUE).add(`${data.mode}-${data.importId}`, data, {
     jobId: `pimport-${data.mode}-${data.importId}`,
     attempts: 3,
@@ -216,6 +239,9 @@ export function getPatientImportJobState(jobId: string): Promise<JobState | null
 }
 
 async function jobState(queueName: string, jobId: string): Promise<JobState | null> {
+  // Sin BullMQ (Workers) no hay registro de jobs que consultar: null en vez de
+  // lanzar, para que los endpoints de estado degraden con elegancia.
+  if (!env.VALKEY_URL) return null;
   const job = await queue(queueName).getJob(jobId);
   if (!job) return null;
   return {

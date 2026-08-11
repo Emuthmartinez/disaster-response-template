@@ -14,8 +14,10 @@ import {
 } from "@/lib/hospitals-meta";
 import { HOSPITAL_ZONE_FILTERS } from "@/components/features/hospitals/HospitalDirectoryUI";
 import { trackHospitalFilterUsed } from "@/lib/analytics";
+import { getPrimaryEmergencyNumber } from "@/lib/emergency-contacts";
 import SearchInput from "@/components/ui/SearchInput";
 import HospitalCard from "./HospitalCard";
+import { SectionLoading, SectionEmpty } from "@/components/ui/SectionLoading";
 
 const HospitalDetailOverlay = dynamic(() => import("./HospitalDetailOverlay"), {
   ssr: false,
@@ -34,6 +36,8 @@ export interface HospitalsListViewProps {
   loading: boolean;
   error: string | null;
   visible: Hospital[];
+  /** Total SIN filtrar. Distingue "no hay datos" de "los filtros no casan". */
+  total: number;
 }
 
 export default function HospitalsListView({
@@ -47,8 +51,12 @@ export default function HospitalsListView({
   loading,
   error,
   visible,
+  total,
 }: HospitalsListViewProps) {
   const [selectedHospital, setSelectedHospital] = useState<Hospital | null>(null);
+  // Config-driven: nunca un número hardcodeado en la pista del estado vacío.
+  // Ver lib/emergency-contacts.ts#getPrimaryEmergencyNumber.
+  const emergencyNumber = getPrimaryEmergencyNumber();
 
   return (
     <>
@@ -112,17 +120,26 @@ export default function HospitalsListView({
 
       <div className="mt-5">
         {loading ? (
-          <p className="rounded-xl border border-slate-200 bg-white px-5 py-8 text-center text-sm text-slate-500">
-            Cargando hospitales…
-          </p>
+          <SectionLoading label="Cargando hospitales…" rows={4} />
         ) : error ? (
           <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
           </p>
         ) : visible.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-8 text-center text-sm text-slate-500">
-            No se encontraron hospitales con esos filtros.
-          </p>
+          <SectionEmpty
+            title={
+              total === 0
+                ? "Todavía no hay hospitales cargados"
+                : "No se encontraron hospitales con esos filtros"
+            }
+            hint={
+              total === 0
+                ? emergencyNumber
+                  ? `El directorio se está poblando. Si es una emergencia, llama al ${emergencyNumber}.`
+                  : "El directorio se está poblando. Si es una emergencia, contacta tu número de emergencia local."
+                : "Prueba a quitar algún filtro o a ampliar la búsqueda."
+            }
+          />
         ) : (
           <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {visible.map((h) => (

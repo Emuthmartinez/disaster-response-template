@@ -17,9 +17,27 @@ backend; session state is held in an httpOnly cookie.
 | API routing config | `src/config/api-registry.ts` | Backend base URL resolution |
 | Session/auth | `src/shared/auth/` | Cookie and admin gate |
 | HTTP client | `src/shared/http/` | Authenticated frontend requests |
-| Domain screens | `src/contexts/` | Models, users, roles, keys and hub |
+| Domain screens | `src/contexts/` | Models, users, roles, keys, hub, hospital-supplies |
+| Generic model CRUD | `src/contexts/models/model-registry.ts` | One entry per simple model; mirrors backend `PUBLIC_RESOURCES` |
 | UI primitives | `src/ui/` | Shared admin atoms/tokens |
 | Tests | `tests/` | Vitest + Testing Library + MSW |
+
+Adding a screen: a flat CRUD model gets a `model-registry.ts` entry (columns +
+create/edit fields) and nothing else; a domain with real workflow (like
+`hospital-supplies` or `patient-imports`) gets its own bounded context under
+`src/contexts/<name>/` plus BFF routes under `app/api/admin/<name>/`.
+
+Deployment: this package runs as a Cloudflare Worker in both environments —
+see `wrangler.jsonc` here, ops guide in `docs/runbook-admin.md`.
+
+**`{items}` envelope contract:** `src/contexts/models/infrastructure/http-models-gateway.ts`
+reads `GET /api/public/<path>` and requires a JSON body shaped `{ items: [...] }`
+(same envelope the backend's CRUD factory always returns). Any hand-written
+backend router meant to plug into a `model-registry.ts` entry — not generated
+by the CRUD factory — MUST return that same `{items:[...]}` shape for its list
+endpoint, or the generic list gateway throws a parse error and the screen
+502s. This has bitten a real backport (see `deletion-requests` in
+`model-registry.ts`): caught only by an E2E pass, not a unit test.
 
 ## Done (local)
 

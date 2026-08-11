@@ -482,23 +482,36 @@ function dataUrlToPhoto(dataUrl: string | null): PhotoData | null {
 }
 
 const MAX_PHOTO_FETCH_BYTES = 15 * 1024 * 1024;
+// Techo del fetch a la fuente externa: sin él, un host colgado dejaba la
+// respuesta de la foto esperando indefinidamente, y cualquier throw de red
+// subía sin try/catch hasta el handler como 500. El resto de ramas de esta
+// función ya degradan con null → el route responde 404; un fallo de red debe
+// hacer lo mismo.
+const EXTERNAL_PHOTO_TIMEOUT_MS = 8_000;
 
 async function fetchExternalPhoto(url: string): Promise<PhotoData | null> {
-  const res = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "User-Agent":
-        "DisasterResponseTemplatePhotoProxy/1.0 (+https://example.org)",
-    },
-  });
-  if (!res.ok) return null;
-  const len = Number(res.headers.get("content-length") || 0);
-  if (len && len > MAX_PHOTO_FETCH_BYTES) return null;
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > MAX_PHOTO_FETCH_BYTES) return null;
-  const contentType = res.headers.get("content-type") || "image/jpeg";
-  if (!contentType.startsWith("image/")) return null;
-  return { contentType, buffer: buf };
+  try {
+    const res = await fetch(url, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(EXTERNAL_PHOTO_TIMEOUT_MS),
+      headers: {
+        "User-Agent":
+          "DisasterResponseTemplatePhotoProxy/1.0 (+https://example.org)",
+      },
+    });
+    if (!res.ok) return null;
+    const len = Number(res.headers.get("content-length") || 0);
+    if (len && len > MAX_PHOTO_FETCH_BYTES) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_PHOTO_FETCH_BYTES) return null;
+    const contentType = res.headers.get("content-type") || "image/jpeg";
+    if (!contentType.startsWith("image/")) return null;
+    return { contentType, buffer: buf };
+  } catch {
+    // Red caída, DNS, TLS, abort por timeout: mismo contrato que getObject()
+    // de r2.ts — null y el caller decide el fallback (404 limpio, nunca 500).
+    return null;
+  }
 }
 
 /**

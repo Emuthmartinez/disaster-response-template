@@ -22,34 +22,52 @@ async function replaceStagingRows(
 ): Promise<void> {
 	const db = getDb();
 	const now = Date.now();
-	await db.transaction(async (tx) => {
-		await tx
-			.delete(patientImportRows)
-			.where(eq(patientImportRows.importId, importId));
-		if (rows.length > 0) {
-			await tx.insert(patientImportRows).values(
-				rows.map((raw, i) => ({
-					id: randomUUID(),
-					importId,
-					rowIndex: i,
-					rawData: raw as Record<string, unknown>,
-					createdAt: now,
-					updatedAt: now,
-				})),
-			);
-		}
-
-		await tx
-			.update(patientImports)
-			.set({
-				status: "pending",
-				failedStage: null,
-				errorSummary: null,
-				totalRows: rows.length,
+	// SIN transacción interactiva (Workers). Orden deliberado: borrar, insertar
+	// en tandas y ACTUALIZAR EL HEADER AL FINAL — si algo corta a medias, el
+	// totalRows del header no coincide con las filas y el guard de integridad
+	// del process marca el lote fallido en vez de procesar a medias.
+	// Re-ejecutar el ingest reemplaza todo de nuevo (idempotente).
+	await db
+		.delete(patientImportRows)
+		.where(eq(patientImportRows.importId, importId));
+	const CHUNK = 100;
+	for (let start = 0; start < rows.length; start += CHUNK) {
+		await db.insert(patientImportRows).values(
+			rows.slice(start, start + CHUNK).map((raw, offset) => ({
+				id: randomUUID(),
+				importId,
+				rowIndex: start + offset,
+				rawData: raw as Record<string, unknown>,
+				createdAt: now,
 				updatedAt: now,
-			})
-			.where(eq(patientImports.id, importId));
-	});
+			})),
+		);
+	}
+	await db
+		.update(patientImports)
+		.set({
+			status: "pending",
+			failedStage: null,
+			errorSummary: null,
+			totalRows: rows.length,
+			updatedAt: now,
+		})
+		.where(eq(patientImports.id, importId));
+}
+
+/**
+ * Materializa las filas de un archivo CSV/XLSX en staging SIN procesarlo.
+ * Camino de Cloudflare Queues: el archivo no cabe/no viaja en el mensaje
+ * (límite 128 KB), así que el productor lo parsea inline y encola solo
+ * `{ importId, mode: "process" }`.
+ */
+export async function stageFileRows(
+	importId: string,
+	contentType: string,
+	fileBase64: string,
+): Promise<void> {
+	const rows = parseImportFile(contentType, fileBase64);
+	await replaceStagingRows(importId, rows);
 }
 
 export interface OcrIngestDeps {

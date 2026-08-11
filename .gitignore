@@ -14,10 +14,39 @@ coverage/
 .DS_Store
 noseyparker-report*
 gitleaks-report*
-# Maintainer-private overlay for the content-audit scanner (real,
-# deployment-specific literals). See scripts/content-audit/banned-patterns.txt
-# for the overlay mechanism.
+# Maintainer-private overlays for the content-audit scanner: real,
+# deployment-specific literals (banned-patterns.local.txt) and extra brand-
+# asset path prefixes (asset-allow.local.txt, only honored when
+# scripts/content-audit/mode is "deployment"). See
+# scripts/content-audit/banned-patterns.txt / run.sh for the mechanisms.
+# scripts/content-audit/mode and .content-audit-fresh are NOT listed here —
+# both are meant to be committed (see run.sh for why).
 scripts/content-audit/banned-patterns.local.txt
+scripts/content-audit/asset-allow.local.txt
+
+# OpenTofu/Terraform (infra/cloudflare/, Camino A). El módulo trae su propio
+# .gitignore local también; esto es un respaldo a nivel de raíz. NO ignora
+# *.tfvars.example ni .terraform.lock.hcl — esos sí se commitean a propósito.
+*.tfstate
+*.tfstate.*
+**/.terraform/
+tfplan*
+*.tfplan
+terraform.tfvars
+
+# Build output y caché local de Cloudflare Workers/OpenNext (Camino A). Cada
+# paquete (frontend/backend/admin) también lo gitignora en su propio
+# .gitignore; esto es un respaldo a nivel de raíz.
+**/.wrangler/
+**/.open-next/
+
+# Dumps de Redis/Valkey de pruebas locales.
+*.rdb
+dump.rdb
+
+# Next.js reescribe esto en cada `next dev`/`next build` local — diff-noise
+# sin nada versionable adentro.
+next-env.d.ts
 
 # Los skills .claude/ SON parte de la plantilla (algunos entornos los ignoran globalmente)
 !.claude/

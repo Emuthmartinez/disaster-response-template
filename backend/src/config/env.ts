@@ -31,6 +31,14 @@ const schema = z.object({
 
   // Invitaciones: base del frontend para construir el link de aceptación.
   APP_BASE_URL: z.string().default("http://localhost:3000"),
+  // Base del PANEL ADMIN para links de invitación por email: la página
+  // /invite/<token> vive en el panel, no en el sitio público. Sin configurar,
+  // cae a APP_BASE_URL (dev local, donde el panel corre aparte igual). Esta
+  // variable independiente existe porque APP_BASE_URL también sirve para OTRO
+  // propósito (base del frontend público / CORS) en un deploy donde frontend y
+  // admin son servicios genuinamente separados (p.ej. dos Workers de Cloudflare)
+  // — ahí no hay un solo valor correcto para ambos usos.
+  ADMIN_BASE_URL: z.string().optional(),
   // Caducidad de una invitación (horas).
   INVITE_TTL_HOURS: z.coerce.number().default(72),
 
@@ -149,10 +157,24 @@ const schema = z.object({
   HUB_FIREWALL_ID: z.coerce.number().optional(),
 });
 
+// NOTA IMPORTANTE (Workers): este módulo se importa en TODOS los runtimes,
+// incluido el Worker de Cloudflare (backend/src/worker.ts). `process.exit()`
+// no existe de verdad ahí — nodejs_compat lo shimea, pero llamarlo NO detiene
+// el arranque: el isolate sigue ejecutando el resto del módulo con `env` en un
+// estado a medio inicializar y el fallo real que ve el operador es un
+// TypeError críptico varias líneas más abajo (p.ej. "Cannot read properties of
+// undefined"), no el mensaje accionable que se logueó. `throw new Error(...)`
+// sí aborta la carga del módulo en cualquier runtime (Node y Workers), así que
+// es la única forma de fail-fast que funciona en los dos.
+function fatal(message: string): never {
+  throw new Error(message);
+}
+
 const parsed = schema.safeParse(process.env);
 if (!parsed.success) {
-  console.error("❌ Config de entorno inválida:", parsed.error.flatten().fieldErrors);
-  process.exit(1);
+  fatal(
+    `Config de entorno inválida: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`,
+  );
 }
 
 export const env = parsed.data;
@@ -160,47 +182,50 @@ export const env = parsed.data;
 // Fail-fast de seguridad: en prod, un JWT_SECRET ausente o corto es una falla de
 // configuración crítica (tokens forjables). Validado en TODOS los envs distintos
 // de test para no descubrirlo en runtime sirviendo a gente en emergencia.
+// Estos SIGUEN siendo fail-fast (no graceful-disable): no hay un modo seguro de
+// "seguir funcionando" con auth forjable o IPs reversibles.
 if (env.NODE_ENV === "production") {
   if (!env.JWT_SECRET || env.JWT_SECRET.length < 32) {
-    console.error("❌ JWT_SECRET es obligatorio y debe tener >=32 caracteres en producción.");
-    process.exit(1);
+    fatal("JWT_SECRET es obligatorio y debe tener >=32 caracteres en producción.");
   }
   if (!env.PATIENT_DOCUMENT_HASH_SECRET || env.PATIENT_DOCUMENT_HASH_SECRET.length < 32) {
-    console.error(
-      "❌ PATIENT_DOCUMENT_HASH_SECRET es obligatorio y debe tener >=32 caracteres en producción.",
+    fatal(
+      "PATIENT_DOCUMENT_HASH_SECRET es obligatorio y debe tener >=32 caracteres en producción.",
     );
-    process.exit(1);
   }
   if (!env.COOKIE_SECURE) {
-    console.error("❌ COOKIE_SECURE debe estar activo en producción (cookies de sesión sobre HTTPS).");
-    process.exit(1);
+    fatal("COOKIE_SECURE debe estar activo en producción (cookies de sesión sobre HTTPS).");
   }
   // IP_SALT: sin sal, los ip_hash persistidos (contacto/donaciones/psychology/
   // reports) son sha256 crudos de la IP → reversibles por rainbow table del
   // espacio IPv4. En un contexto humanitario eso deanonimiza a víctimas y
   // donantes. Se exige igual que los otros secretos: presente y >=32 chars.
   if (!env.IP_SALT || env.IP_SALT.length < 32) {
-    console.error("❌ IP_SALT es obligatorio y debe tener >=32 caracteres en producción (hash de IP no reversible).");
-    process.exit(1);
+    fatal("IP_SALT es obligatorio y debe tener >=32 caracteres en producción (hash de IP no reversible).");
   }
 }
 
-// Fail-fast de gating: los módulos opcionales (ResponseGrid, OCR de pacientes)
-// están OFF por defecto. Si alguien los enciende con el flag pero no completó su
-// config, es mejor morir en el arranque con un mensaje accionable que responder
-// 503/501 en producción sin explicación. Se valida en TODOS los envs (el flag
-// por defecto es false, así que test/dev nunca disparan esto sin querer).
+// Gating de módulos OPCIONALES (ResponseGrid, OCR de pacientes): a diferencia
+// de los secretos de arriba, una config a medias aquí NO es un riesgo de
+// seguridad — es una integración de terceros que el operador puede simplemente
+// no tener lista todavía. Fallar el arranque completo por esto se lleva por
+// delante TODA la API (missing-persons, reports, hospitals...) por un módulo
+// que ya sabe degradarse solo (DisabledNeedPublisher, 501 en OCR). Por eso el
+// patrón es log-and-stay-disabled: se avisa fuerte por consola y se apaga el
+// flag en `env` (los composition roots de esos módulos ya leen `env.ENABLE_*`
+// para decidir si se montan, así que apagarlo aquí basta) en vez de `fatal()`.
 if (env.ENABLE_RESPONSEGRID) {
   const missing = [
     !env.RESPONSEGRID_API_URL && "RESPONSEGRID_API_URL",
     !env.RESPONSEGRID_EMERGENCY_SLUG && "RESPONSEGRID_EMERGENCY_SLUG",
   ].filter(Boolean);
   if (missing.length) {
-    console.error(
-      `❌ ENABLE_RESPONSEGRID=true requiere: ${missing.join(", ")}. ` +
-        "Ejemplo: RESPONSEGRID_API_URL=https://api.example.org RESPONSEGRID_EMERGENCY_SLUG=my-event-2026",
+    console.warn(
+      `⚠️  ENABLE_RESPONSEGRID=true pero falta: ${missing.join(", ")}. ` +
+        "Los módulos de necesidades/acopio quedan DESHABILITADOS (no se monta /api/needs ni /api/acopio) " +
+        "en vez de tumbar el arranque completo. Ejemplo: RESPONSEGRID_API_URL=https://api.example.org RESPONSEGRID_EMERGENCY_SLUG=my-event-2026",
     );
-    process.exit(1);
+    env.ENABLE_RESPONSEGRID = false;
   }
 }
 if (env.ENABLE_PATIENT_OCR) {
@@ -209,11 +234,12 @@ if (env.ENABLE_PATIENT_OCR) {
     !env.MINIMAX_OCR_BASE_URL && "MINIMAX_OCR_BASE_URL",
   ].filter(Boolean);
   if (missing.length) {
-    console.error(
-      `❌ ENABLE_PATIENT_OCR=true requiere: ${missing.join(", ")}. ` +
-        "Ejemplo: MINIMAX_OCR_BASE_URL=https://api.example.org/v1",
+    console.warn(
+      `⚠️  ENABLE_PATIENT_OCR=true pero falta: ${missing.join(", ")}. ` +
+        "La importación OCR queda DESHABILITADA (los uploads image/* se rechazan con 501) " +
+        "en vez de tumbar el arranque completo. Ejemplo: MINIMAX_OCR_BASE_URL=https://api.example.org/v1",
     );
-    process.exit(1);
+    env.ENABLE_PATIENT_OCR = false;
   }
 }
 

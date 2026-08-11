@@ -62,11 +62,13 @@ const SITE_APEX_SRC = SITE_APEX_DOMAIN ? ` https://*.${SITE_APEX_DOMAIN}` : "";
 
 // CSP en modo ENFORCING (bloquea, no solo reporta). La política ya lista los
 // orígenes de terceros que la app usa de verdad: Google Analytics/Tag Manager,
-// Google Translate, Cloudflare Turnstile, Google Fonts, y la API propia
-// (derivada de NEXT_PUBLIC_API_URL / NEXT_PUBLIC_SITE_APEX_DOMAIN) por
-// connect-src. `img-src https:` se mantiene amplio a propósito por los tiles
-// de OpenStreetMap y los redirects de foto a orígenes externos de las
-// fuentes de sync.
+// Google Translate, Cloudflare Turnstile, y la API propia (derivada de
+// NEXT_PUBLIC_API_URL / NEXT_PUBLIC_SITE_APEX_DOMAIN) por connect-src. Google
+// Fonts NO aparece: las tipografías se auto-alojan (app/fonts/, ver
+// next/font/local en app/layout.tsx) — cero peticiones de red en build ni en
+// runtime. `img-src https:` se mantiene amplio a propósito por los tiles de
+// OpenStreetMap y los redirects de foto a orígenes externos de las fuentes de
+// sync.
 //
 // NOTA operativa: `script-src`/`style-src` conservan `'unsafe-inline'` porque
 // Next inyecta scripts/estilos inline. Endurecer eso a nonces es un cambio mayor
@@ -90,13 +92,24 @@ const contentSecurityPolicy = [
   // (translate-pa.googleapis.com como <script>, por eso va aquí ADEMÁS de en
   // connect-src para el XHR de traducción). Si falta CUALQUIERA de esos
   // orígenes el widget no inicializa y la página no se traduce.
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://translate.google.com https://translate.googleapis.com https://translate-pa.googleapis.com https://www.gstatic.com https://challenges.cloudflare.com",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://translate.googleapis.com https://www.gstatic.com",
+  // static.cloudflareinsights.com: beacon RUM que Cloudflare auto-inyecta en el
+  // HTML cuando la zona tiene Web Analytics activado. Sin este origen la
+  // consola de CADA visita muestra una violación de CSP y no llega ninguna
+  // métrica RUM. No es "arreglable" vía Terraform: el flag disable_rum del
+  // ruleset de la zona no cubre esta inyección — mismo tipo de choque que Bot
+  // Fight Mode con la CSP (ver docs de infra).
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://translate.google.com https://translate.googleapis.com https://translate-pa.googleapis.com https://www.gstatic.com https://challenges.cloudflare.com https://static.cloudflareinsights.com",
+  // fonts.googleapis.com no aparece: las tipografías se auto-alojan (ver abajo).
+  "style-src 'self' 'unsafe-inline' https://translate.googleapis.com https://www.gstatic.com",
   // MEDIA_SRC = API + CDN R2. API_ORIGIN cubre el backend en http (dev:
   // http://localhost:8080), que `https:` no matchea. En prod son https y ya
   // estarían cubiertos por `https:`; añadirlos es inocuo y explícito.
   `img-src 'self' data: blob: https:${MEDIA_SRC}`,
-  "font-src 'self' data: https://fonts.gstatic.com",
+  // Las tipografías se sirven desde el propio origen (app/fonts/ vía
+  // next/font/local → /_next/static). Sin fonts.gstatic.com: si algún día
+  // reaparece una petición ahí, es un next/font/google que se coló y debe
+  // verse como violación de CSP, no silenciarse.
+  "font-src 'self' data:",
   // connect-src: GA, y la API propia — el navegador habla con el backend por
   // NEXT_PUBLIC_API_URL (no same-origin tras el split web/api), incluido el
   // proxy de OpenPanel /api/op. NEXT_PUBLIC_SITE_APEX_DOMAIN (opcional) cubre
@@ -137,6 +150,9 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.join(import.meta.dirname, ".."),
   },
+  // No anunciar el stack (framework/versión) en cada respuesta vía el header
+  // `X-Powered-By`. Sin coste, sin razón para dejarlo activo.
+  poweredByHeader: false,
   // Cabeceras de seguridad para toda la app (ver constantes arriba).
   async headers() {
     return [

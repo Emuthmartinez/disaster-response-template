@@ -137,6 +137,72 @@ export const missingPersonSuppressions = pgTable(
   ],
 );
 
+/* -------------------------------------------------------------- missing_pets */
+/**
+ * Mascotas desaparecidas o encontradas. TABLA APARTE de `missing_persons`, no una
+ * columna discriminadora en ella. La razón NO es estética:
+ *
+ *  1. El conteo público de personas desaparecidas no puede incluir animales
+ *     jamás. Con dos tablas eso es imposible POR CONSTRUCCIÓN — ninguna consulta
+ *     de personas puede devolver una mascota aunque alguien olvide un WHERE.
+ *  2. Los despliegues de este template no son atómicos ni ordenados: la
+ *     migración la corre una persona a mano y el deploy del backend es otro
+ *     botón manual (VPS o Workers). Una tabla nueva es INERTE hasta que hay
+ *     código que la lee, así que cualquier orden de despliegue degrada bien. Una
+ *     columna `kind` nueva en `missing_persons` tendría un orden letal: backend
+ *     con `WHERE kind='person'` desplegado ANTES de la migración rompe TODAS las
+ *     consultas de personas en un sitio que la gente usa para buscar a su familia.
+ *
+ * A propósito NO replica la maquinaria de `missing_persons`: sin `source`/
+ * `external_id` (no hay feeds externos de mascotas), sin tabla de supresiones,
+ * sin federación de hub y sin índice parcial para el worker de rehost de fotos.
+ * Es CRUD y nada más. Si algún día aparece un feed real de mascotas, eso se
+ * diseña entonces, no se copia ahora "por si acaso".
+ */
+export const missingPets = pgTable(
+  "missing_pets",
+  {
+    id: text("id").primaryKey(),
+    // Puede ir vacío: quien ENCUENTRA un animal casi nunca sabe su nombre. La UI
+    // muestra "Sin nombre" en ese caso, en vez de obligar a inventar uno.
+    name: text("name").notNull().default(""),
+    species: text("species").notNull().default(""),
+    breed: text("breed").notNull().default(""),
+    color: text("color").notNull().default(""),
+    sex: text("sex"),
+    /** Edad en años. Misma semántica que missing_persons.age. */
+    age: integer("age"),
+    description: text("description").notNull().default(""),
+    lastSeen: text("last_seen").notNull().default(""),
+    contact: text("contact").notNull().default(""),
+    /**
+     * Número de microchip. NUNCA se serializa al cliente — el DTO solo expone
+     * `hasMicrochip`. Publicarlo permitiría a un tercero "demostrar" que la
+     * mascota es suya citando el número del propio anuncio; guardándolo pero sin
+     * mostrarlo sigue sirviendo para verificar a quien la reclama.
+     */
+    microchip: text("microchip"),
+    photo: text("photo"),
+    status: text("status").notNull().default("active"),
+    resolutionNote: text("resolution_note"),
+    resolutionPhoto: text("resolution_photo"),
+    resolvedAt: epochMs("resolved_at"),
+    lat: doublePrecision("lat"),
+    lng: doublePrecision("lng"),
+    createdAt: epochMs("created_at").notNull(),
+    /**
+     * Se rellena cuando `persistPhotoDataUrl` sube la foto a R2. Aquí es
+     * informativo: a diferencia de missing_persons NO hay índice parcial ni
+     * worker que reclame filas pendientes (ver cabecera).
+     */
+    photoMigratedAt: epochMs("photo_migrated_at"),
+  },
+  (t) => [
+    index("idx_pets_status_created").on(t.status, t.createdAt.desc()),
+    index("idx_pets_map_coords").on(t.lat, t.lng),
+  ],
+);
+
 /* ------------------------------------------------------------- chat_messages */
 export const chatMessages = pgTable(
   "chat_messages",

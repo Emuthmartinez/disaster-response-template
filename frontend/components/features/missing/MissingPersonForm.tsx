@@ -18,6 +18,7 @@ import {
 } from "./missing-form-helpers";
 import { usePhotoUpload } from "@/hooks/usePhotoUpload";
 import { MISSING_PHOTO_MAX_DIM } from "@/lib/image-resize";
+import { usePrivacyConsent } from "@/components/layout/PrivacyConsentGate";
 import type {
   MissingReportType,
   FoundPlace,
@@ -45,6 +46,7 @@ export default function MissingPersonForm({
   initialReportType = "missing",
   initialFoundPlace = null,
 }: Props) {
+  const { ensureConsent } = usePrivacyConsent();
   const [mounted, setMounted] = useState(false);
   const { mountRef: turnstileMount, getToken: turnstileGetToken } = useTurnstile();
   const [reportType, setReportType] =
@@ -91,6 +93,10 @@ export default function MissingPersonForm({
   const handleSubmit = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault();
+
+      // Consentimiento ANTES de enviar datos personales. Si la persona no acepta,
+      // no se envia nada. Ver components/layout/PrivacyConsentGate.tsx.
+      if (!(await ensureConsent())) return;
       setError(null);
       if (!name.trim()) {
         setError("Indica el nombre de la persona.");
@@ -177,6 +183,7 @@ export default function MissingPersonForm({
       personStatus,
       onSubmit,
       turnstileGetToken,
+      ensureConsent,
     ],
   );
 

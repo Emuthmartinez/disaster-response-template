@@ -28,10 +28,11 @@ instance ready to be configured for your situation.
 
 ## The headline: an agent can take this from clone to live deployment
 
-This template ships five [Claude Code](https://claude.com/claude-code) skills
+This template ships [Claude Code](https://claude.com/claude-code) skills
 under `.claude/skills/`. Open the repo in an agent that reads `CLAUDE.md`
 (Claude Code does this automatically) and ask it to stand up your
-deployment — it runs these five skills, in this order:
+deployment — it runs a common setup sequence, then one of two deployment
+paths:
 
 1. **`disaster-configure`** — writes your organization, disaster, region, map
    center, and domains into `config/deployment.config.json` and the few
@@ -44,45 +45,58 @@ deployment — it runs these five skills, in this order:
    Twitter) images.
 3. **`disaster-secrets-bootstrap`** — generates every required secret
    (`JWT_SECRET`, `IP_SALT`, database/cache passwords, etc.) with `openssl
-   rand` and writes your real `.env`, refusing to finish while any
-   `CHANGE_ME` placeholder survives.
-4. **`disaster-deploy-vps`** — hardens a fresh Ubuntu VPS (deploy user, UFW,
-   fail2ban), installs Docker, brings up `docker-compose.prod.yml` behind
-   Caddy with Let's Encrypt TLS on your domains, and runs smoke checks
-   (services healthy, TLS issued, a test report goes end-to-end, admin login
-   works).
+   rand`. Destination depends on your path below: a real `.env` (Path B) or
+   Doppler (Path A) — same variable names either way.
+4. **Deploy — pick one path:**
+   - **Path A — Cloudflare Workers + Neon + Doppler (recommended for a new
+     deployment):** `disaster-deploy-cloudflare` provisions Neon Postgres,
+     applies the optional Cloudflare zone module, fills in each
+     `wrangler.jsonc`, and deploys the frontend/backend/admin Workers. No
+     server to maintain, scales on its own. Full operational runbook:
+     [`docs/runbook-cloudflare-launch.md`](docs/runbook-cloudflare-launch.md).
+   - **Path B — VPS + Docker Compose (alternative):**
+     `disaster-deploy-vps` hardens a fresh Ubuntu VPS (deploy user, UFW,
+     fail2ban), installs Docker, brings up `docker-compose.prod.yml` behind
+     Caddy with Let's Encrypt TLS on your domains, and runs smoke checks. This
+     is the **only** path where BullMQ background queues, interactive
+     Postgres transactions, and the admin panel all run together with no
+     adaptation. Runbook: [`docs/deploy-vps.md`](docs/deploy-vps.md).
 5. **`disaster-content-audit`** — the final gate before you share your fork
-   publicly or add contributors: scans the whole tree for the kind of
-   literal this template itself was scrubbed of (real IPs, personal emails,
-   leftover secrets, a previous event's identity) and refuses to say "clean"
-   until it actually is.
+   publicly or add contributors, regardless of which path you took: scans the
+   whole tree for the kind of literal this template itself was scrubbed of
+   (real IPs, personal emails, leftover secrets, a previous event's identity)
+   and refuses to say "clean" until it actually is.
 
 Each skill is a `SKILL.md` with exact file paths, verification steps, and
 hard stops — an agent doesn't need any tribal knowledge beyond what's in the
-repo. The human-readable version of this same path is
-[`docs/standup-guide.md`](docs/standup-guide.md); the VPS step alone is
-detailed in [`docs/deploy-vps.md`](docs/deploy-vps.md).
+repo. The human-readable version of this same path, covering both
+deployment options, is [`docs/standup-guide.md`](docs/standup-guide.md).
 
 ## Architecture, in one paragraph
 
-Three Next.js/Express apps behind one reverse proxy. `frontend/` (Next.js +
-React + Leaflet) is the public map and directories; it never touches the
-database directly, only the API. `backend/` (Express + TypeScript + Drizzle
-ORM over Postgres) serves everything under `/api`, plus `backend/worker/`
-(BullMQ over Valkey) for background sync, geocoding, deduplication, and
-optional hub federation. `admin/` is a separate Next.js microservice — a
+Three Next.js/Express apps, deployable two ways on the same codebase — see
+[`docs/architecture.md`](docs/architecture.md) for the full picture and
+`CLAUDE.md` for which to pick. `frontend/` (Next.js + React + Leaflet) is the
+public map and directories; it never touches the database directly, only the
+API. `backend/` (Express + TypeScript + Drizzle ORM over Postgres) serves
+everything under `/api`. `admin/` is a separate Next.js microservice — a
 backend-for-frontend with its own RBAC (JWT in an httpOnly cookie) that talks
 to the backend over the internal network, never straight to the database.
-Production is **one VPS**: `docker-compose.prod.yml` + Caddy as the single
-TLS-terminating reverse proxy, Postgres and Valkey co-located by default. See
-[`docs/architecture.md`](docs/architecture.md) for the full picture.
+**Path A (recommended):** all three run as Cloudflare Workers against
+external Neon Postgres, with background jobs on Cloudflare Queues + Cron
+Triggers instead of a long-running worker process. **Path B (alternative):**
+one VPS, `docker-compose.prod.yml` + Caddy as the single TLS-terminating
+reverse proxy, Postgres and Valkey co-located, plus `backend/worker/`
+(BullMQ) for background sync, geocoding, deduplication, and optional hub
+federation — this is the only path where those queues and interactive
+database transactions both work without adaptation.
 
 ## Quickstart
 
 With your information ready (org name, disaster/region, domains, real local
-emergency numbers — see `docs/standup-guide.md` for the full list), the path
-below takes about **30 minutes** of active work, plus however long DNS
-propagation takes.
+emergency numbers — see `docs/standup-guide.md` for the full list), Path A
+takes about **45 minutes** of active work and Path B about **30 minutes**,
+plus however long DNS propagation takes either way.
 
 1. Click **Use this template** on GitHub and create your own repository from
    it.
@@ -90,12 +104,14 @@ propagation takes.
 3. Open it in Claude Code (or another coding agent that reads
    `CLAUDE.md`/`AGENTS.md`).
 4. Follow `CLAUDE.md` — it points the agent at the standup skills in the
-   order above. Answer the questions it asks (your organization's name, your
-   region's real emergency numbers, your domains) as they come up; the
-   skills refuse to invent this information for you.
+   order above, and asks you which deployment path you want. Answer the
+   questions it asks (your organization's name, your region's real emergency
+   numbers, your domains) as they come up; the skills refuse to invent this
+   information for you.
 
 Prefer to do it by hand, or want to see every step before an agent runs it?
-Read [`docs/standup-guide.md`](docs/standup-guide.md).
+Read [`docs/standup-guide.md`](docs/standup-guide.md) — it covers both paths
+with their own quickstarts.
 
 ## What this template deliberately does NOT include
 
@@ -104,10 +120,12 @@ Read [`docs/standup-guide.md`](docs/standup-guide.md).
   labeled as an example. There is no shortcut that ships real crisis data —
   you provide your region's real information yourself, deliberately, through
   `disaster-configure`.
-- **Kubernetes / multi-node / observability stacks.** The supported path is
-  one VPS with docker compose and Caddy. A k3s+OpenTofu path and a
-  Prometheus/Loki/Grafana observability stack are reasonable next steps at
-  larger scale, but they are future work, not part of this template.
+- **Kubernetes / multi-node / a custom observability stack.** The two
+  supported paths are Cloudflare Workers (which scales on its own, no
+  cluster to run) and one VPS with docker compose and Caddy. A k3s+OpenTofu
+  path for the VPS side and a Prometheus/Loki/Grafana observability stack
+  are reasonable next steps at larger scale, but they are future work, not
+  part of this template.
 - **An i18n framework.** The UI ships in Spanish (the default language for
   this kind of deployment) as plain JSX strings — there is no next-intl/
   i18next abstraction underneath. Localizing to another language today means

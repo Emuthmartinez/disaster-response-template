@@ -1,7 +1,7 @@
 "use client";
 
 import type { EmergencyReport, ReportType } from "@/lib/types";
-import type { MissingStats } from "@/hooks/useMissingStats";
+import type { MissingStats } from "@/lib/missing";
 import SearchInput from "@/components/ui/SearchInput";
 import ReportCard from "./ReportCard";
 import { AdminToggle } from "./AdminPanel";

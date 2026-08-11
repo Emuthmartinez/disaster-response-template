@@ -7,6 +7,17 @@ export interface SectionLink {
   badge?: "missing" | "found";
   /** Visible en la barra inferior móvil (máx. 3 + botón Menú). */
   mobileBar?: boolean;
+  /**
+   * Visible en el header de escritorio (SectionNav#DESKTOP_HEADER_LINKS lo
+   * deriva de aquí — única fuente de verdad, ver SectionNav.tsx). El header
+   * de escritorio solo tiene sitio para destinos de primer nivel; no todo lo
+   * que aparece en el menú móvil (SECTION_LINKS completo) debería marcar esto.
+   */
+  desktopHeader?: boolean;
+  /** Etiqueta a usar en el header de escritorio si difiere de `shortLabel`
+   *  (p.ej. "Personas" en vez de "Desaparecidas", que es más apropiado para
+   *  el badge de la barra móvil). Por defecto usa `shortLabel`. */
+  desktopLabel?: string;
 }
 
 export const PRIMARY_MAP_LINK: SectionLink = {
@@ -27,6 +38,18 @@ export const SECTION_LINKS: SectionLink[] = [
     tone: "purple",
     badge: "missing",
     mobileBar: true,
+    desktopHeader: true,
+    desktopLabel: "Personas",
+  },
+  {
+    // Ruta propia, no el ancla `#mascotas` de la home: desde una subpagina
+    // (/hospitales, /guia…) un enlace a un ancla no lleva a ningun sitio.
+    href: "/mascotas",
+    label: "Mascotas perdidas",
+    shortLabel: "Mascotas",
+    icon: "🐾",
+    tone: "purple",
+    desktopHeader: true,
   },
   {
     href: "/hospitales",
@@ -48,6 +71,7 @@ export const SECTION_LINKS: SectionLink[] = [
     label: "Guía rápida",
     shortLabel: "Guía",
     icon: "🧭",
+    desktopHeader: true,
   },
   {
     href: "/acopio",
@@ -55,6 +79,7 @@ export const SECTION_LINKS: SectionLink[] = [
     shortLabel: "Acopio",
     icon: "🟢",
     tone: "emerald",
+    desktopHeader: true,
   },
   {
     href: "/publicar-necesidad",

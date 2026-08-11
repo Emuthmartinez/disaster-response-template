@@ -1,10 +1,17 @@
 name: CI
 
+# `staging` corre aquí igual que `main` a propósito: si este template lo usas
+# con un flujo work-branch -> PR a `staging` -> PR `staging` -> `main` (ver el
+# lenguaje condicional de CONTRIBUTING.md sobre una rama de integración
+# separada), un trigger limitado a `main` deja SIN CI justo el PR que el
+# equipo abre de verdad. El template en sí solo trae la rama `main`, así que
+# hasta que un fork cree `staging` esto es un no-op inofensivo — no falla ni
+# se salta nada, simplemente no hay esa rama todavía.
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 # Least-privilege default: every job gets read-only repo access and nothing
 # else. No job in this workflow needs to write anything back to the repo,
@@ -27,7 +34,7 @@ jobs:
   # time.
   # ---------------------------------------------------------------------
   build-backend:
-    name: backend (typecheck + build)
+    name: backend (lint + typecheck + build)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,6 +55,10 @@ jobs:
         working-directory: backend
         run: npm ci
 
+      - name: Lint
+        working-directory: backend
+        run: npm run lint
+
       - name: Typecheck
         working-directory: backend
         run: npm run typecheck
@@ -55,6 +66,85 @@ jobs:
       - name: Build
         working-directory: backend
         run: npm run build
+
+  # ---------------------------------------------------------------------
+  # test-backend: la suite del backend es de integración, no unitaria —
+  # backend/vitest.config.ts fija fileParallelism:false precisamente porque
+  # cada fichero comparte un Postgres y un Valkey reales. Sin ellos, decenas
+  # de tests fallan por error de conexión — por eso necesita su propio job
+  # con service containers, no un paso más en build-backend.
+  #
+  # Versiones de imagen y credenciales espejan docker-compose.yml para que
+  # local y CI coincidan; test/helpers.ts ya usa exactamente estas URLs por
+  # defecto si no hay DATABASE_URL/VALKEY_URL en el entorno.
+  # ---------------------------------------------------------------------
+  test-backend:
+    name: backend (tests de integración)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mapa_app
+          POSTGRES_PASSWORD: localdev
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mapa_app -d app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: "postgres://mapa_app:localdev@localhost:5432/app"
+      VALKEY_URL: "redis://localhost:6379"
+      # Sintéticos, solo-CI. Nunca secretos reales — existen para que los
+      # checks fail-fast de config/env.ts pasen contra una base descartable.
+      JWT_SECRET: "ci-jwt-secret-not-for-prod-0123456789"
+      PATIENT_DOCUMENT_HASH_SECRET: "ci-patient-document-hash-secret-0123456789"
+      IP_SALT: "ci-ip-salt-not-for-prod-0123456789"
+      TRUSTED_IP_HEADER: "cf-connecting-ip"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      # MIGRATIONS_DIR por defecto es relativo al CWD del proceso, y esto
+      # corre desde backend/ — sin el override buscaría backend/infra/db/migrations,
+      # que no existe (infra/db vive un nivel arriba, fuera de backend/).
+      - name: Apply migrations
+        working-directory: backend
+        env:
+          MIGRATIONS_DIR: "../infra/db/migrations"
+        run: npm run migrate
+
+      - name: Test
+        working-directory: backend
+        run: npm test
 
   # ---------------------------------------------------------------------
   # frontend: public Next.js site. `next build` prerenders pages, which
@@ -65,7 +155,7 @@ jobs:
   # build succeeds against these fake values with no backend running).
   # ---------------------------------------------------------------------
   build-frontend:
-    name: frontend (typecheck + build)
+    name: frontend (lint + typecheck + test + build)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,13 +192,124 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
       - name: Typecheck
         working-directory: frontend
         run: npm run typecheck
 
+      - name: Test
+        working-directory: frontend
+        run: npm test
+
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  # ---------------------------------------------------------------------
+  # offline-build-frontend: guardia contra dependencias de RED en tiempo de
+  # build del frontend.
+  #
+  # Por qué existe: `next/font/google` descarga los .woff2 desde Google en
+  # tiempo de BUILD. Le pasó de verdad a un deployment real de este template
+  # (un run de CI falló con un error que parecía de código, apuntando a la
+  # fuente de Google Fonts; el mismo commit re-ejecutado sin tocar una línea
+  # pasó limpio) — ver el comentario en frontend/app/layout.tsx. Y como
+  # `deploy-frontend.yml` despliega a producción en cada push a `main` que
+  # toque frontend/, ese mismo parpadeo de red tumba un despliegue real.
+  #
+  # Las fuentes ya están auto-alojadas (frontend/app/fonts/, ver su README),
+  # así que hoy el build no necesita red. Este job CONGELA esa propiedad: si
+  # alguien vuelve a meter `next/font/google` — o cualquier otra descarga en
+  # tiempo de build — se cae AQUÍ, en un job cuyo nombre dice exactamente qué
+  # pasó, en vez de dentro de un despliegue a producción.
+  #
+  # `npm ci` corre CON red (bajar dependencias es legítimo); solo el `build`
+  # se ejecuta aislado, dentro de un namespace de red sin interfaces externas.
+  # ---------------------------------------------------------------------
+  offline-build-frontend:
+    name: frontend (build sin red)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Mismos NEXT_PUBLIC_* que `build-frontend` (ver arriba): el build los
+      # inlinea, y con valores distintos no estaríamos probando el mismo
+      # build. GitHub Actions no soporta anclas YAML, de ahí la duplicación.
+      NEXT_PUBLIC_API_URL: "https://api.example.org"
+      NEXT_PUBLIC_ASSET_PREFIX: ""
+      NEXT_PUBLIC_R2_PUBLIC_BASE: "https://cdn.example.org"
+      NEXT_PUBLIC_SITE_APEX_DOMAIN: "example.org"
+      NEXT_PUBLIC_GA_MEASUREMENT_ID: "G-XXXXXXXXXX"
+      NEXT_PUBLIC_TURNSTILE_SITE_KEY: "1x00000000000000000000AA"
+      NEXT_PUBLIC_STRIPE_DONATION_URL: "https://donate.example.org"
+      NEXT_PUBLIC_RESPONSEGRID_SLUG: "example-slug"
+      NEXT_PUBLIC_RESPONSEGRID_WHATSAPP_URL: "https://example.org/chat"
+      NEXT_PUBLIC_ACOPIO_DEFAULT_COUNTRY: "XX"
+      NEXT_PUBLIC_EXPENSES_URL: "https://expenses.example.org"
+      NEXT_PUBLIC_OPENPANEL_CLIENT_ID: "00000000-0000-0000-0000-000000000000"
+      NEXT_PUBLIC_OPENPANEL_DASHBOARD_URL: "https://analytics.example.org"
+      NEXT_PUBLIC_OPENPANEL_PRODUCTION_HOST: "https://analytics.example.org"
+      NEXT_PUBLIC_PROPOSAL_VARIANT: "default"
+      # Next hace ping a telemetry.nextjs.org. Sin apagarlo, este job podría
+      # fallar por telemetría y no por una dependencia real — justo el tipo
+      # de falso positivo que esta guardia existe para eliminar.
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Con red: bajar dependencias es una dependencia de red legítima y
+      # esperada. Lo que NO puede depender de la red es el `build`.
+      - name: Install dependencies (con red)
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build sin acceso a la red
+        working-directory: frontend
+        run: |
+          # `unshare --net` crea un namespace de red sin ninguna interfaz
+          # externa: dentro no hay salida a Internet ni DNS. `lo` se levanta
+          # porque alguna herramienta puede querer loopback.
+          #
+          # `sudo -E env "PATH=$PATH"`: sudo resetea PATH por `secure_path`,
+          # y sin esto no se encuentra el node que instaló setup-node.
+          #
+          # SOLO FUNCIONA EN RUNNERS LINUX (unshare es de util-linux/Linux).
+          # No portar este job a un runner macOS/Windows sin reescribirlo.
+          sudo -E env "PATH=$PATH" unshare --net -- \
+            bash -euo pipefail -c '
+              ip link set lo up
+
+              # CONTROL POSITIVO. Una guardia que no puede fallar es
+              # decorativa: si el aislamiento dejara de funcionar (cambio de
+              # runner, de kernel, de permisos), el build pasaría CON red y
+              # este job daría un visto bueno falso PARA SIEMPRE. Por eso
+              # primero se comprueba que de verdad NO hay red.
+              if curl -sS --max-time 10 -o /dev/null https://fonts.gstatic.com; then
+                echo "::error::El aislamiento de red no funciona: se alcanzó fonts.gstatic.com desde dentro del namespace. Esta guardia no está probando nada."
+                exit 1
+              fi
+              echo "Aislamiento verificado: sin salida a Internet dentro del namespace."
+
+              npm run build
+            '
+
+      - name: Qué significa si este job falla
+        if: failure()
+        run: |
+          echo "::error::El build del frontend necesitó RED. Casi siempre es \`next/font/google\` (u otra descarga en tiempo de build) que volvió a colarse. Auto-aloja el recurso — ver frontend/app/fonts/README.md — en vez de relajar esta guardia: un push a main puede desplegar a producción sin aprobación humana."
 
   # ---------------------------------------------------------------------
   # admin: internal Next.js panel. Verified locally that `next build`
@@ -116,7 +317,7 @@ jobs:
   # safe fallback), so nothing extra is injected here.
   # ---------------------------------------------------------------------
   build-admin:
-    name: admin (typecheck + build)
+    name: admin (lint + typecheck + test + build)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -137,9 +338,17 @@ jobs:
         working-directory: admin
         run: npm ci
 
+      - name: Lint
+        working-directory: admin
+        run: npm run lint
+
       - name: Typecheck
         working-directory: admin
         run: npm run typecheck
+
+      - name: Test
+        working-directory: admin
+        run: npm test
 
       - name: Build
         working-directory: admin

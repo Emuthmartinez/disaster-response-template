@@ -1,0 +1,6 @@
+Marcador del chequeo único de historial git del content-audit.
+La primera corrida de scripts/content-audit/run.sh en un fork nuevo usa la
+presencia de este archivo para saber que debe verificar que el historial es
+pequeño y reciente (que no se coló el historial de otro repo/otra crisis),
+y lo borra del working tree. Commitea ese borrado tras la primera corrida —
+ver CONTRIBUTING.md → 'Al pasar de plantilla a despliegue real'.

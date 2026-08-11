@@ -12,6 +12,17 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Salida del adaptador de Cloudflare Workers y estado local de wrangler.
+    // Sin esto, `npm run lint` revienta en cuanto se ha hecho UN build:
+    // eslint entra en `.open-next/` (worker.js y los chunks copiados), esos
+    // ficheros no casan con los `files` de eslint-config-next, y el bloque de
+    // `rules` de abajo pide `react-hooks/...` sin que el plugin esté definido
+    // para ellos → "could not find plugin react-hooks". El .gitignore no vale:
+    // el flat config de eslint no lo lee.
+    ".open-next/**",
+    ".wrangler/**",
+    // Módulos generados en prebuild (ver scripts/generate-brand-logo.mjs).
+    "lib/generated/**",
     // Volcado vendado de un design system (no es código de la app).
     "Emergencia nacional de búsqueda/**",
     // Scripts de build/utilidades (Node .mjs, usan require/CommonJS); no se

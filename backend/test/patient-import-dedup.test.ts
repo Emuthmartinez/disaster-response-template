@@ -35,8 +35,13 @@ describe("dedup por document_hash con nombre distinto (#151)", () => {
       "@/services/patient-imports"
     );
     const hospital = await freshHospital();
-    // Documento demo compartido; los dígitos producen el mismo HMAC.
-    const documentId = "V-12.345.678";
+    // Documento demo compartido DENTRO del test pero ALEATORIO por ejecución:
+    // con un documento fijo, el paciente aplicado en la ejecución anterior
+    // sobrevive en una base persistente y el "primer" lote del siguiente run
+    // deduplica contra él (falso rojo). Los dígitos aleatorios mantienen el
+    // HMAC estable dentro del test y único entre ejecuciones.
+    const digits = String(Math.floor(10_000_000 + Math.random() * 89_999_999));
+    const documentId = `V-${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
 
     // 1) Primer lote: crea el paciente base (nombre A) y lo aplica a hospital_patients.
     const first = await createImport(

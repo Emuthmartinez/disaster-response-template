@@ -101,3 +101,35 @@ describe("user-facing-mutation-needs-guard", () => {
     });
   });
 });
+
+const SERVICE = "/repo/backend/src/services/x.ts";
+
+describe("no-interactive-transactions", () => {
+  it("prohíbe .transaction(fn) con función; permite lo demás", () => {
+    ruleTester.run("no-interactive-transactions", plugin.rules["no-interactive-transactions"], {
+      valid: [
+        // Sin argumento función -> no es una transacción interactiva (o ni
+        // siquiera una llamada real); no dispara.
+        { code: `db.transaction`, filename: SERVICE },
+        // Otro método cualquiera, no "transaction".
+        { code: `db.insert(x).values(y)`, filename: SERVICE },
+        // Un objeto propio con un método .transaction() SIN función como
+        // argumento (p.ej. reenvía un objeto de opciones) no dispara.
+        { code: `metrics.transaction(options)`, filename: SERVICE },
+      ],
+      invalid: [
+        {
+          code: `db.transaction(async (tx) => { await tx.insert(x).values(y); })`,
+          filename: SERVICE,
+          errors: [{ messageId: "forbidden" }],
+        },
+        {
+          // No hace falta llamarse "db": un wrapper/alias tampoco se cuela.
+          code: `conn.transaction(function (tx) { return tx.select().from(x); })`,
+          filename: SERVICE,
+          errors: [{ messageId: "forbidden" }],
+        },
+      ],
+    });
+  });
+});

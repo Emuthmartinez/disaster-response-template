@@ -12,7 +12,7 @@ export const metadata: Metadata = pageMetadata({
 
 export default function PublicarNecesidadPage() {
   return (
-    <SubPageShell breadcrumb="Publicar necesidad">
+    <SubPageShell breadcrumb="Publicar necesidad" path="/publicar-necesidad">
       <PublishNeedForm />
     </SubPageShell>
   );

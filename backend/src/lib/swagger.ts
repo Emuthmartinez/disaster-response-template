@@ -15,8 +15,29 @@ import swaggerJSDoc from "swagger-jsdoc";
 import { buildCrudOpenApiPaths } from "@/public-api/crud-factory";
 import { PUBLIC_RESOURCES } from "@/public-api";
 
-const here = path.dirname(fileURLToPath(import.meta.url)); // .../src/lib (o dist/lib)
-const srcRoot = path.resolve(here, ".."); // .../src (o dist)
+/**
+ * Raíz de fuentes a escanear (.../src o .../dist), o "" si no hay sistema de
+ * ficheros que escanear.
+ *
+ * En Cloudflare Workers no hay FS ni `import.meta.url` utilizable, y
+ * `fileURLToPath(undefined)` lanza. Al calcularse en ámbito de módulo, esa
+ * excepción tumbaba el import de server.ts y con él TODA la API (1101 en cada
+ * ruta, no solo /api/openapi.json).
+ *
+ * Se resuelve de forma perezosa y tolerante: si no se puede, se devuelve "" y
+ * `buildOpenApiSpec` omite el escaneo por glob. La spec sigue teniendo todo lo
+ * definido en código (los paths CRUD de public-api); solo faltan los bloques
+ * `@swagger` escritos como comentarios en las rutas.
+ */
+function resolveSrcRoot(): string {
+  try {
+    if (!import.meta.url) return "";
+    const here = path.dirname(fileURLToPath(import.meta.url)); // .../src/lib (o dist/lib)
+    return path.resolve(here, ".."); // .../src (o dist)
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Construye la spec OpenAPI uniendo DOS fuentes:
@@ -50,6 +71,8 @@ export function buildOpenApiSpec(): object {
 
 /** Solo la parte escaneada de los bloques @swagger (routes a mano). */
 function buildFromJsDoc(): object {
+  const srcRoot = resolveSrcRoot();
+
   return swaggerJSDoc({
     definition: {
       openapi: "3.0.3",
@@ -92,11 +115,15 @@ function buildFromJsDoc(): object {
       },
     },
     // Escanea ambos: .ts (dev con tsx) y .js (prod compilado en dist/).
-    apis: [
-      path.join(srcRoot, "routes", "**", "*.{ts,js}"),
-      path.join(srcRoot, "public-api", "**", "*.{ts,js}"),
-      // Módulos de integración (DDD): el @swagger vive en su capa interface/http.
-      path.join(srcRoot, "modules", "**", "*.{ts,js}"),
-    ],
+    // Sin FS (Workers) la lista va vacía: swagger-jsdoc no escanea nada y la
+    // spec se queda con lo definido en código.
+    apis: srcRoot
+      ? [
+          path.join(srcRoot, "routes", "**", "*.{ts,js}"),
+          path.join(srcRoot, "public-api", "**", "*.{ts,js}"),
+          // Módulos de integración (DDD): el @swagger vive en su capa interface/http.
+          path.join(srcRoot, "modules", "**", "*.{ts,js}"),
+        ]
+      : [],
   });
 }

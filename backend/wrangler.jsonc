@@ -1,0 +1,183 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // CHANGE_ME: nombre real del Worker — ver skill disaster-configure.
+  "name": "ejemplo-emergencia-api",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-08-01",
+  // nodejs_compat da los builtins de Node (http, crypto, buffer, stream) que
+  // necesitan Express, helmet, pg y jsonwebtoken.
+  "compatibility_flags": ["nodejs_compat"],
+  // El dominio propio (api.mapa.example.org, ver config/deployment.config.json
+  // → domains.api) se adjunta por la API de CUENTA
+  // (/accounts/{id}/workers/domains), NO aquí.
+  //
+  // NO declarar `routes` aquí: con `routes`, wrangler llama además a
+  // /zones/{id}/workers/routes, para lo que un token de cuenta (sin permiso de
+  // zona) no tiene alcance, y el fallo aborta el deploy DESPUÉS de subir el
+  // código y ANTES de promover la versión — el Worker se queda sirviendo la
+  // build ANTERIOR y el comando de deploy parece casi correcto (sale del CI en
+  // verde salvo por ese último paso, fácil de pasar por alto). El síntoma en
+  // producción es un despliegue que "no hizo nada": el código nuevo nunca
+  // llegó a servir tráfico y nadie lo nota hasta el siguiente incidente.
+  //
+  // Config NO secreta (versionada a propósito). Los secretos van por
+  // `wrangler secret bulk` desde tu gestor de secretos (Doppler u otro),
+  // nunca aquí.
+  //
+  // Cron Triggers. Las expresiones son la FUENTE DE VERDAD en
+  // src/services/cron-jobs.ts (CRON_EARTHQUAKES / CRON_GEOCODE) y aquí se
+  // declaran IDÉNTICAS; test/cron-jobs.test.ts compara las dos listas para que
+  // editar una sin la otra rompa el build en vez de dejar un cron que no
+  // ejecuta nada.
+  //
+  // - "*/5 * * * *"    sismos. Cada 5 minutos: el feed del USGS se refresca
+  //   cada minuto, pero el evento ya pasó y las réplicas entran con holgura;
+  //   cada minuto solo multiplica invocaciones sin ganar frescura útil.
+  // - "2-59/5 * * * *" geocode. Misma cadencia, DESFASADA dos minutos:
+  //   controller.cron es lo único que distingue un trigger de otro, así que dos
+  //   expresiones iguales serían indistinguibles, y el desfase evita que las
+  //   dos tareas compitan por el mismo presupuesto de invocación.
+  //
+  // A nivel superior a propósito: `triggers` SÍ se hereda en env.staging, así
+  // que los dos entornos sincronizan sin duplicar configuración.
+  "triggers": { "crons": ["*/5 * * * *", "2-59/5 * * * *"] },
+  // Cloudflare Queues (camino EXPERIMENTAL de Workers, ver AGENTS.md). El
+  // productor es el seam de despacho (src/lib/job-dispatch.ts) vía el binding
+  // NEEDS_QUEUE/IMPORTS_QUEUE; el consumidor es el handler `queue` de
+  // src/worker.ts, en este MISMO Worker.
+  //
+  // Reintentos deliberados, no defaults: un fallo de publicación suele ser una
+  // caída del tercero, que quiere reintentos ESPACIADOS (5 x 60 s), no tres
+  // seguidos. Agotados los reintentos, el mensaje pasa al DLQ, cuyo consumidor
+  // lo persiste en audit_log (acción queue.dead_letter) — la retención del DLQ
+  // es de 4 días y sin consumidor se PIERDE.
+  //
+  // OJO: a diferencia de `triggers`, `queues` NO SE HEREDA en env.staging (los
+  // nombres de cola difieren por entorno) — cada bloque de env declara los
+  // suyos completos, o el consumidor de staging simplemente no arranca.
+  "queues": {
+    "producers": [
+      { "binding": "NEEDS_QUEUE", "queue": "ejemplo-emergencia-needs" },
+      { "binding": "IMPORTS_QUEUE", "queue": "ejemplo-emergencia-imports" }
+    ],
+    "consumers": [
+      {
+        "queue": "ejemplo-emergencia-needs",
+        "max_retries": 5,
+        "retry_delay": 60,
+        "max_batch_size": 5,
+        "dead_letter_queue": "ejemplo-emergencia-needs-dlq"
+      },
+      { "queue": "ejemplo-emergencia-needs-dlq", "max_retries": 0 },
+      // Importación de pacientes: lotes pesados → un mensaje por invocación
+      // (max_batch_size 1). Reintentos como el worker BullMQ del compose (3,
+      // espaciados).
+      {
+        "queue": "ejemplo-emergencia-imports",
+        "max_retries": 3,
+        "retry_delay": 30,
+        "max_batch_size": 1,
+        "dead_letter_queue": "ejemplo-emergencia-imports-dlq"
+      },
+      { "queue": "ejemplo-emergencia-imports-dlq", "max_retries": 0 }
+    ]
+  },
+  "vars": {
+    // Bounding box de ejemplo — AJÚSTALO a la región real del despliegue.
+    // getBbox() (services/earthquakes.ts) LANZA si falta cualquiera de las
+    // cuatro, así que sin esto el sync de sismos no puede correr. Mismos
+    // valores de ejemplo que .env.example.
+    "EARTHQUAKES_MIN_LAT": "-10",
+    "EARTHQUAKES_MAX_LAT": "10",
+    "EARTHQUAKES_MIN_LNG": "-80",
+    "EARTHQUAKES_MAX_LNG": "-60",
+    "NODE_ENV": "production",
+    "COOKIE_SECURE": "true",
+    "APP_BASE_URL": "https://mapa.example.org",
+    "ADMIN_BASE_URL": "https://admin.mapa.example.org",
+    "CORS_ORIGINS": "https://mapa.example.org",
+    // Detrás de Cloudflare la única cabecera de IP no falsificable es esta.
+    // X-Forwarded-For la puede poner el cliente.
+    "TRUSTED_IP_HEADER": "cf-connecting-ip"
+  },
+  // Deliberadamente SIN binding de Hyperdrive ni de D1. En Workers el driver es
+  // el HTTP de Neon (ver src/db/index.ts), que necesita una URL de Neon de
+  // verdad — un binding de Hyperdrive aquí (cadena local de pooling) rompe casi
+  // todas las consultas si algo lo inyecta como DATABASE_URL. Si tu despliegue
+  // migra a un driver TCP con pooling, ese es el momento de añadir Hyperdrive,
+  // no antes: un binding creado "por si acaso" y sin código detrás es peor que
+  // no tenerlo — parece cableado y no lo está.
+  //
+  // El esquema compartido (../infra/db/schema.ts) vive FUERA de backend/, así
+  // que esbuild busca sus imports en infra/node_modules y no los encuentra. Es
+  // el mismo motivo por el que tsconfig.json ya tiene "paths" para tsc.
+  "alias": {
+    "drizzle-orm": "./node_modules/drizzle-orm",
+    "drizzle-orm/pg-core": "./node_modules/drizzle-orm/pg-core",
+    // swagger-ui-express usa __dirname para servir sus assets desde disco, y en
+    // Workers no existe: el import tumbaba el arranque entero (toda la API a
+    // 1101, no solo /api/docs). Ver src/shims/swagger-ui-express.ts.
+    "swagger-ui-express": "./src/shims/swagger-ui-express.ts"
+  },
+  // Entorno de staging: Worker aparte, dominio aparte, y sobre todo BASE DE
+  // DATOS aparte (rama de staging de tu proveedor Postgres, vía el
+  // DATABASE_URL del config de staging de tu gestor de secretos). Es lo que
+  // permite crear reportes de prueba sin tocar el registro real.
+  //
+  // Sin binding de Hyperdrive/D1 aquí tampoco, por el mismo motivo de arriba.
+  "env": {
+    "staging": {
+      // CHANGE_ME: nombre real del Worker de staging — ver disaster-configure.
+      "name": "ejemplo-emergencia-api-staging",
+      // Colas de staging: mismos parámetros que producción (un staging que no
+      // se parece a producción no prueba nada), nombres con sufijo -staging.
+      "queues": {
+        "producers": [
+          { "binding": "NEEDS_QUEUE", "queue": "ejemplo-emergencia-needs-staging" },
+          { "binding": "IMPORTS_QUEUE", "queue": "ejemplo-emergencia-imports-staging" }
+        ],
+        "consumers": [
+          {
+            "queue": "ejemplo-emergencia-needs-staging",
+            "max_retries": 5,
+            "retry_delay": 60,
+            "max_batch_size": 5,
+            "dead_letter_queue": "ejemplo-emergencia-needs-dlq-staging"
+          },
+          { "queue": "ejemplo-emergencia-needs-dlq-staging", "max_retries": 0 },
+          {
+            "queue": "ejemplo-emergencia-imports-staging",
+            "max_retries": 3,
+            "retry_delay": 30,
+            "max_batch_size": 1,
+            "dead_letter_queue": "ejemplo-emergencia-imports-dlq-staging"
+          },
+          { "queue": "ejemplo-emergencia-imports-dlq-staging", "max_retries": 0 }
+        ]
+      },
+      "vars": {
+        "EARTHQUAKES_MIN_LAT": "-10",
+        "EARTHQUAKES_MAX_LAT": "10",
+        "EARTHQUAKES_MIN_LNG": "-80",
+        "EARTHQUAKES_MAX_LNG": "-60",
+        "NODE_ENV": "production",
+        "COOKIE_SECURE": "true",
+        "APP_BASE_URL": "https://staging.mapa.example.org",
+        "ADMIN_BASE_URL": "https://admin-staging.mapa.example.org",
+        "CORS_ORIGINS": "https://staging.mapa.example.org",
+        "TRUSTED_IP_HEADER": "cf-connecting-ip"
+      },
+      "alias": {
+        "drizzle-orm": "./node_modules/drizzle-orm",
+        "drizzle-orm/pg-core": "./node_modules/drizzle-orm/pg-core",
+        "swagger-ui-express": "./src/shims/swagger-ui-express.ts"
+      },
+      "observability": {
+        "enabled": true
+      }
+    }
+  },
+  "observability": {
+    "enabled": true
+  }
+}

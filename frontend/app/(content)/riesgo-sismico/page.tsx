@@ -41,6 +41,8 @@ export default function RiesgoSismicoPage() {
         headline: "Riesgo sísmico para inspección",
         description:
           "Vista de priorización para inspección sísmica basada en sacudida estimada por USGS, exposición poblacional y huellas de edificios de OpenStreetMap.",
+        datePublished: "2026-01-01",
+        dateModified: "2026-01-01",
       }}
     >
       <section className="mx-auto grid w-full max-w-7xl gap-6 px-4 py-8 lg:grid-cols-[minmax(0,1fr)_340px]">

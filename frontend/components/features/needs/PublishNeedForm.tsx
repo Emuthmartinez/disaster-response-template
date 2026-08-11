@@ -12,6 +12,7 @@ import {
 import LegalConsentNotice from "@/components/content/LegalConsentNotice";
 import { useTurnstile } from "@/hooks/useTurnstile";
 import { ApiError } from "@/lib/api";
+import { usePrivacyConsent } from "@/components/layout/PrivacyConsentGate";
 
 /**
  * El módulo de needs/ResponseGrid está gateado en el backend por
@@ -38,6 +39,7 @@ function emptyItem(): ItemRow {
 }
 
 export default function PublishNeedForm() {
+  const { ensureConsent } = usePrivacyConsent();
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<NeedPriority>("high");
   const [address, setAddress] = useState("");
@@ -81,6 +83,10 @@ export default function PublishNeedForm() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+
+    // Consentimiento ANTES de enviar datos personales. Si la persona no acepta,
+    // no se envia nada. Ver components/layout/PrivacyConsentGate.tsx.
+    if (!(await ensureConsent())) return;
     setError(null);
     setSuccess(null);
 

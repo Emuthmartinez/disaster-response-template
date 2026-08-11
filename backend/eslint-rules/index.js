@@ -11,6 +11,10 @@
  *   no-turnstile-in-public-api       — la superficie máquina NO lleva requireHuman.
  *   user-facing-mutation-needs-guard — mutaciones de src/routes/** llevan
  *                                      requireHuman O un gate (capability/admin/cron).
+ *   no-interactive-transactions      — nada de db.transaction(...) en backend/src/**
+ *                                      (el driver HTTP de Neon bajo Workers no las
+ *                                      soporta). backend/worker/** SÍ puede: corre
+ *                                      bajo Node, fuera del glob de esta regla.
  *
  * Modelo de detección: las rutas se montan con `router.<verbo>("path", ...mw,
  * handler)`. Inspeccionamos esa CallExpression y miramos los nombres de los
@@ -187,11 +191,77 @@ const userFacingMutationNeedsGuard = {
   },
 };
 
+/**
+ * Prohíbe `algo.transaction(fn)` (Drizzle: `db.transaction(async (tx) => ...)`,
+ * o el mismo patrón sobre cualquier objeto — no hace falta llamarse "db" para
+ * que la regla dispare, así que un wrapper o un alias tampoco se cuela) en
+ * TODO backend/src/**.
+ *
+ * POR QUÉ: en Cloudflare Workers el driver de Postgres es el HTTP de Neon (ver
+ * src/db/index.ts), que no soporta transacciones interactivas — un socket TCP
+ * pertenece a la petición que lo abrió, y el HTTP driver no tiene sockets que
+ * mantener abiertos entre sentencias. `db.transaction(...)` compila y pasa la
+ * suite local (node-postgres sí las soporta) y falla en producción SOLO bajo
+ * Workers, con un error que no dice "usa el patrón X" — la regla existe para
+ * que ese fallo se vea en el editor y en CI, no en producción sirviendo a
+ * gente en emergencia.
+ *
+ * `backend/worker/**` (el worker BullMQ de Node, camino docker-compose) queda
+ * FUERA del glob de esta regla a propósito — corre bajo Node, con
+ * node-postgres, donde las transacciones interactivas sí funcionan.
+ */
+const noInteractiveTransactions = {
+  meta: {
+    type: "problem",
+    docs: {
+      description:
+        "db.transaction(async (tx) => ...) no corre en Cloudflare Workers (el driver HTTP " +
+        "de Neon no soporta transacciones interactivas). Prohibido en backend/src/**.",
+    },
+    schema: [],
+    messages: {
+      forbidden:
+        "db.transaction(...) prohibido en backend/src/** — el driver HTTP de Neon " +
+        "(Cloudflare Workers) no soporta transacciones interactivas. Sustitúyelo por " +
+        "uno de estos patrones (ver AGENTS.md, sección \"PROHIBIDO db.transaction " +
+        "interactiva en src/**\"): (1) un UPDATE condicional que reclame la fila en una " +
+        "sola sentencia (conditional-UPDATE claim, WHERE status IN (...)); (2) un id " +
+        "determinista (p.ej. sha256 de una clave estable) para que el insert sea un " +
+        "no-op idempotente vía ON CONFLICT (deterministic ids); o (3) escrituras " +
+        "secuenciales con una compensación best-effort si el segundo paso falla " +
+        "(compensation — crea, y si el paso dependiente falla, revierte lo creado). " +
+        "Referencias en este repo: services/patient-imports/apply.ts (claim + id " +
+        "determinista) y services/roles.ts (compensación).",
+    },
+  },
+  create(context) {
+    return {
+      CallExpression(node) {
+        const callee = node.callee;
+        if (callee.type !== "MemberExpression") return;
+        if (callee.property.type !== "Identifier" || callee.property.name !== "transaction") {
+          return;
+        }
+        const [firstArg] = node.arguments;
+        if (!firstArg) return;
+        if (
+          firstArg.type !== "ArrowFunctionExpression" &&
+          firstArg.type !== "FunctionExpression"
+        ) {
+          return;
+        }
+        context.report({ node, messageId: "forbidden" });
+      },
+    };
+  },
+};
+
 export default {
   rules: {
     "require-rate-limit": requireRateLimit,
     "require-capability-in-public-api": requireCapabilityInPublicApi,
     "no-turnstile-in-public-api": noTurnstileInPublicApi,
     "user-facing-mutation-needs-guard": userFacingMutationNeedsGuard,
+    "no-interactive-transactions": noInteractiveTransactions,
   },
 };

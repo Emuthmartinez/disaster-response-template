@@ -1,0 +1,73 @@
+name: Verificación nocturna de jobs
+
+# Corre scripts/verify-jobs.sh contra los dos entornos cada noche: frescura
+# de los cron triggers, la API viva y el conteo de dead-letters en las
+# colas. Un fallo pone el job de ese entorno en rojo — es la señal de "un
+# cron dejó de correr" o "hay mensajes muertos que investigar". No escribe
+# nada.
+#
+# `continue-on-error: true` en AMBOS jobs a propósito: staging y producción
+# son entornos independientes, y este flag lo deja explícito en la
+# definición del workflow (no solo "porque no hay `needs:` entre ellos hoy")
+# — así, si algún día alguien añade una dependencia entre los dos jobs o los
+# convierte en una matriz, un fallo en un entorno NO cancela ni oculta el
+# resultado del otro. Cada job sigue mostrando su propio rojo/verde en la
+# lista de jobs del run (el badge del workflow se pone verde igualmente,
+# pero el fallo individual sigue siendo visible ahí) — el fallo no
+# desaparece, solo no bloquea la comprobación del otro entorno.
+on:
+  schedule:
+    # 07:00 UTC. Ajusta esta hora a la franja de bajo tráfico de tu zona
+    # horaria si tu despliegue no está pensado para UTC.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  staging:
+    name: Jobs de staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Instalar Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      - name: Instalar dependencias (solo pg, para el conteo de dead-letters)
+        working-directory: backend
+        run: npm ci --omit=dev --ignore-scripts
+
+      - name: verify-jobs staging
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_STAGING }}
+        run: ./scripts/verify-jobs.sh staging
+
+  production:
+    name: Jobs de producción
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Instalar Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      - name: Instalar dependencias (solo pg, para el conteo de dead-letters)
+        working-directory: backend
+        run: npm ci --omit=dev --ignore-scripts
+
+      - name: verify-jobs production
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: ./scripts/verify-jobs.sh production

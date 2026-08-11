@@ -12,7 +12,7 @@ export const metadata: Metadata = pageMetadata({
 
 export default function SolicitarBorradoPage() {
   return (
-    <SubPageShell breadcrumb="Solicitar eliminación de datos">
+    <SubPageShell breadcrumb="Solicitar eliminación de datos" path="/solicitar-borrado">
       <section className="mx-auto w-full max-w-xl px-4 py-10 sm:px-6">
         <h1 className="qi-h1">Solicitar eliminación de datos</h1>
         <p className="mt-2 text-sm leading-relaxed text-[var(--etext2)]">

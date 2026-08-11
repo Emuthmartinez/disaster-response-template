@@ -31,10 +31,10 @@ funcional y genérica, lista para configurar según tu situación.
 
 ## Lo central: un agente puede llevar esto de clon a despliegue en vivo
 
-Esta plantilla trae cinco skills de [Claude Code](https://claude.com/claude-code)
+Esta plantilla trae skills de [Claude Code](https://claude.com/claude-code)
 bajo `.claude/skills/`. Abre el repo en un agente que lea `CLAUDE.md` (Claude
 Code lo hace automáticamente) y pídele que levante tu despliegue: correrá
-estas cinco skills, en este orden:
+una secuencia común de configuración y luego uno de dos caminos de deploy:
 
 1. **`disaster-configure`** — escribe tu organización, tu desastre, tu
    región, el centro del mapa y tus dominios en
@@ -46,47 +46,63 @@ estas cinco skills, en este orden:
    el favicon y las imágenes sociales generadas (OpenGraph/Twitter).
 3. **`disaster-secrets-bootstrap`** — genera cada secreto requerido
    (`JWT_SECRET`, `IP_SALT`, contraseñas de base de datos/caché, etc.) con
-   `openssl rand` y escribe tu `.env` real, sin darse por terminado mientras
-   sobreviva algún placeholder `CHANGE_ME`.
-4. **`disaster-deploy-vps`** — endurece un VPS Ubuntu nuevo (usuario de
-   deploy, UFW, fail2ban), instala Docker, levanta
-   `docker-compose.prod.yml` detrás de Caddy con TLS de Let's Encrypt sobre
-   tus dominios, y corre smoke checks (servicios sanos, TLS emitido, un
-   reporte de prueba llega de punta a punta, el login de admin funciona).
+   `openssl rand`. El destino depende de tu camino: un `.env` real (Camino
+   B) o Doppler (Camino A) — mismos nombres de variable en ambos casos.
+4. **Despliega — elige un camino:**
+   - **Camino A — Cloudflare Workers + Neon + Doppler (recomendado para un
+     despliegue nuevo):** `disaster-deploy-cloudflare` provisiona Neon
+     Postgres, aplica el módulo opcional de la zona de Cloudflare, rellena
+     cada `wrangler.jsonc` y despliega los Workers de
+     frontend/backend/admin. Sin servidor que mantener, escala sola.
+     Runbook operativo completo:
+     [`docs/runbook-cloudflare-launch.md`](docs/runbook-cloudflare-launch.md).
+   - **Camino B — VPS + Docker Compose (alternativo):**
+     `disaster-deploy-vps` endurece un VPS Ubuntu nuevo (usuario de deploy,
+     UFW, fail2ban), instala Docker, levanta `docker-compose.prod.yml`
+     detrás de Caddy con TLS de Let's Encrypt sobre tus dominios, y corre
+     smoke checks. Es el **único** camino donde las colas BullMQ, las
+     transacciones interactivas de Postgres y el panel admin corren juntos
+     sin adaptación. Runbook: [`docs/deploy-vps.md`](docs/deploy-vps.md).
 5. **`disaster-content-audit`** — el último portón antes de compartir tu
-   fork públicamente o sumar colaboradores: escanea todo el árbol en busca
-   del tipo de literal del que esta misma plantilla fue depurada (IPs
-   reales, correos personales, secretos olvidados, la identidad de un
-   evento anterior) y se niega a decir "limpio" hasta que de verdad lo esté.
+   fork públicamente o sumar colaboradores, sin importar el camino elegido:
+   escanea todo el árbol en busca del tipo de literal del que esta misma
+   plantilla fue depurada (IPs reales, correos personales, secretos
+   olvidados, la identidad de un evento anterior) y se niega a decir
+   "limpio" hasta que de verdad lo esté.
 
 Cada skill es un `SKILL.md` con rutas de archivo exactas, pasos de
 verificación y "hard stops" — un agente no necesita conocimiento tribal más
 allá de lo que ya está en el repo. La versión legible para humanos de este
-mismo camino es [`docs/standup-guide.md`](docs/standup-guide.md); el paso de
-VPS solo está detallado en [`docs/deploy-vps.md`](docs/deploy-vps.md).
+mismo camino, cubriendo las dos opciones de despliegue, es
+[`docs/standup-guide.md`](docs/standup-guide.md).
 
 ## Arquitectura, en un párrafo
 
-Tres apps Next.js/Express detrás de un único reverse proxy. `frontend/`
-(Next.js + React + Leaflet) es el mapa público y los directorios; nunca toca
-la base de datos directo, solo la API. `backend/` (Express + TypeScript +
-Drizzle ORM sobre Postgres) sirve todo bajo `/api`, más
-`backend/worker/` (BullMQ sobre Valkey) para sync en segundo plano,
-geocodificación, deduplicación y federación de hub opcional. `admin/` es un
-microservicio Next.js separado —un backend-for-frontend con su propio RBAC
-(JWT en cookie httpOnly) que habla con el backend por la red interna, nunca
-directo a la base de datos. Producción es **un solo VPS**:
-`docker-compose.prod.yml` + Caddy como único reverse proxy que termina TLS,
-con Postgres y Valkey co-ubicados por defecto. Ver
-[`docs/architecture.md`](docs/architecture.md) para el panorama completo.
+Tres apps Next.js/Express, desplegables de dos formas sobre el mismo código
+— ver [`docs/architecture.md`](docs/architecture.md) para el panorama
+completo y `CLAUDE.md` para cuál elegir. `frontend/` (Next.js + React +
+Leaflet) es el mapa público y los directorios; nunca toca la base de datos
+directo, solo la API. `backend/` (Express + TypeScript + Drizzle ORM sobre
+Postgres) sirve todo bajo `/api`. `admin/` es un microservicio Next.js
+separado —un backend-for-frontend con su propio RBAC (JWT en cookie
+httpOnly) que habla con el backend por la red interna, nunca directo a la
+base de datos. **Camino A (recomendado):** los tres corren como Workers de
+Cloudflare contra Neon Postgres externo, con jobs de fondo en Cloudflare
+Queues + Cron Triggers en vez de un proceso worker de larga duración.
+**Camino B (alternativo):** un solo VPS, `docker-compose.prod.yml` + Caddy
+como único reverse proxy que termina TLS, Postgres y Valkey co-ubicados, más
+`backend/worker/` (BullMQ) para sync en segundo plano, geocodificación,
+deduplicación y federación de hub opcional — es el único camino donde esas
+colas y las transacciones interactivas de base de datos funcionan sin
+adaptación.
 
 ## Guía rápida
 
 Con tu información lista de antemano (nombre de tu organización,
 desastre/región, dominios, números reales de emergencia de tu zona — ver
-`docs/standup-guide.md` para la lista completa), el camino de abajo toma
-alrededor de **30 minutos** de trabajo activo, más lo que tarde la
-propagación de DNS.
+`docs/standup-guide.md` para la lista completa), el Camino A toma alrededor
+de **45 minutos** de trabajo activo y el Camino B alrededor de **30
+minutos**, más lo que tarde la propagación de DNS en cualquiera de los dos.
 
 1. Usa **Use this template** en GitHub y crea tu propio repositorio a partir
    de este.
@@ -94,13 +110,14 @@ propagación de DNS.
 3. Ábrelo en Claude Code (u otro agente de código que lea
    `CLAUDE.md`/`AGENTS.md`).
 4. Sigue `CLAUDE.md` — apunta al agente hacia las skills de standup en el
-   orden de arriba. Responde las preguntas que te haga (el nombre de tu
-   organización, los números reales de emergencia de tu región, tus
-   dominios) a medida que aparezcan; las skills se niegan a inventarte esa
-   información.
+   orden de arriba, y te pregunta qué camino de despliegue quieres. Responde
+   las preguntas que te haga (el nombre de tu organización, los números
+   reales de emergencia de tu región, tus dominios) a medida que aparezcan;
+   las skills se niegan a inventarte esa información.
 
 ¿Prefieres hacerlo a mano, o quieres ver cada paso antes de que un agente lo
-corra? Lee [`docs/standup-guide.md`](docs/standup-guide.md).
+corra? Lee [`docs/standup-guide.md`](docs/standup-guide.md) — cubre los dos
+caminos, cada uno con su propia guía rápida.
 
 ## Lo que esta plantilla deliberadamente NO incluye
 
@@ -109,10 +126,12 @@ corra? Lee [`docs/standup-guide.md`](docs/standup-guide.md).
   marcada como ejemplo de forma obvia. No hay atajo que envíe datos reales
   de una crisis: tú aportas la información real de tu región tú mismo,
   deliberadamente, a través de `disaster-configure`.
-- **Kubernetes / multi-nodo / stack de observabilidad.** El camino soportado
-  es un solo VPS con docker compose y Caddy. Un camino con k3s+OpenTofu y un
-  stack de observabilidad Prometheus/Loki/Grafana son pasos razonables a
-  mayor escala, pero son trabajo futuro, no parte de esta plantilla.
+- **Kubernetes / multi-nodo / un stack de observabilidad propio.** Los dos
+  caminos soportados son Cloudflare Workers (que escala solo, sin clúster
+  que operar) y un solo VPS con docker compose y Caddy. Un camino con
+  k3s+OpenTofu para el lado VPS y un stack de observabilidad
+  Prometheus/Loki/Grafana son pasos razonables a mayor escala, pero son
+  trabajo futuro, no parte de esta plantilla.
 - **Un framework de i18n.** La UI se envía en español (el idioma por
   defecto para este tipo de despliegue) como strings JSX planos —no hay una
   abstracción tipo next-intl/i18next debajo. Localizar a otro idioma hoy

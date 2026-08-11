@@ -21,6 +21,7 @@
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",
     "@aws-sdk/client-s3": "*",
+    "@neondatabase/serverless": "^1.1.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "*",
     "cookie-parser": "^1.4.7",
@@ -54,6 +55,7 @@
     "supertest": "^7.2.2",
     "typescript": "^5",
     "typescript-eslint": "^8.62.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.120.0"
   }
 }

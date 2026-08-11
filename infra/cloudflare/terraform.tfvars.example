@@ -1,0 +1,63 @@
+# Copiar a terraform.tfvars (gitignorado). Los placeholders de abajo son
+# obviamente falsos — reemplázalos por los valores reales de TU zona antes
+# de `tofu apply`. Ninguno de estos valores es secreto (zone_id/account_id
+# no son credenciales), pero SÍ son identidad de un despliegue concreto: no
+# los vuelvas default en variables.tf.
+#
+# EL TOKEN NO VA AQUÍ. Corre bajo tu gestor de secretos y deja que el
+# provider lea CLOUDFLARE_API_TOKEN del entorno — ver README.md, sección
+# "Permisos del token", y el wrapper `./tf`.
+
+# --- Identidad de la zona (obligatorios, sin default a propósito) ----------
+# Sácalos del dashboard de Cloudflare (la zona → Overview → panel derecho)
+# o, si tu fork ya corrió disaster-configure, de config/deployment.config.json.
+zone_id    = "CHANGE_ME_ZONE_ID"
+zone_name  = "mapa.example.org"
+account_id = "CHANGE_ME_ACCOUNT_ID"
+
+api_hostname       = "api.mapa.example.org"
+admin_hostname     = "admin.mapa.example.org"
+r2_public_hostname = "cdn.mapa.example.org"
+
+# --- Origen ------------------------------------------------------------------
+# Vacío hasta que exista el VPS. Con esto vacío NO se crean A/CNAME del
+# sitio; el resto (settings, WAF, cache, correo, CAA) sí se aplica — y
+# debería aplicarse desde el día 0, antes de tener servidor.
+origin_ip   = ""
+origin_ipv6 = ""
+
+# --- Plan ---------------------------------------------------------------------
+# Empieza asumiendo Free. Sube a true solo tras confirmar que la zona está
+# en Pro+ (si no, el apply falla con 400 en las reglas que no existen en
+# Free — ver waf.tf / ratelimit.tf).
+enable_paid_rulesets = false
+free_plan_mode       = true
+
+# --- Correo -------------------------------------------------------------------
+# false = dominio bloqueado para correo (recomendado hasta elegir proveedor
+# o activar Cloudflare Email Routing a mano en el panel de Cloudflare).
+email_enabled            = false
+mail_provider            = "none"
+cloudflare_email_routing = false
+dmarc_policy             = "reject"
+dmarc_rua                = "" # p.ej. "dmarc@mapa.example.org" cuando haya buzón
+
+# --- SMTP transaccional del panel admin (invitaciones + reset por OTP) -----
+# Opcional. Ver resend.tf — solo crea registros si smtp_provider = "resend".
+smtp_provider          = "none"
+resend_dkim_public_key = ""
+
+# --- Fricción anti-bot --------------------------------------------------------
+# bot_fight_mode empieza en false: lee el comentario sobre esta variable en
+# settings.tf antes de encenderla (colisiona con la CSP del frontend si no
+# la ajustas primero).
+bot_fight_mode          = false
+browser_integrity_check = true
+security_level          = "medium"
+hsts_preload            = true
+
+# --- TLS -----------------------------------------------------------------------
+# Empieza en "full". Pasar a "strict" SOLO cuando el origen ya sirva un
+# certificado válido — si no, el sitio responde 526 para todo el mundo. Ver
+# README, sección "Orden de aplicación".
+ssl_mode = "full"

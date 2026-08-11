@@ -1,23 +1,139 @@
 ---
 name: disaster-secrets-bootstrap
-description: Lee .env.example, genera valores aleatorios fuertes (openssl rand) para cada variable [REQ] que es un secreto, y escribe .env (nunca se commitea). Opcionalmente sube los secretos como GitHub Environment secrets con gh. Rehúsa declararse terminado mientras quede CHANGE_ME o un valor de example.org en una variable [REQ].
+description: Genera valores aleatorios fuertes (openssl rand) para cada secreto [REQ] del contrato documentado en .env.example, y los entrega por UNA de dos vías — .env/.prod.env local (camino VPS, nunca se commitea) o un proyecto Doppler con configs prd/stg (camino Cloudflare Workers, ver disaster-deploy-cloudflare). Rehúsa declararse terminado mientras quede CHANGE_ME o un valor de example.org en una variable [REQ], y rehúsa REGENERAR nada si el despliegue ya parece estar en vivo, salvo confirmación explícita del deployer.
 ---
 
 # disaster-secrets-bootstrap
 
 Tercer paso del standup (después de `disaster-configure` y `disaster-brand`,
-antes de `disaster-deploy-vps`). Convierte el contrato documentado en
-`.env.example` en un `.env` (o `.prod.env`) real, con secretos generados y
+antes de `disaster-deploy-cloudflare`/`disaster-deploy-vps`). Convierte el
+contrato documentado en `.env.example` en secretos reales, generados y con
 los valores de identidad/dominio ya resueltos por `disaster-configure`.
+Entrega esos secretos por una de dos vías — ver "Dos vías de entrega" más
+abajo — según qué camino de despliegue vaya a usar el fork.
+
+## Re-run guard — antes de generar NADA
+
+**Este skill genera secretos aleatorios NUEVOS cada vez que corre.** Eso es
+correcto la primera vez (standup de un fork nuevo) y es DESTRUCTIVO si el
+despliegue ya está en vivo:
+
+- Regenerar `JWT_SECRET` invalida toda sesión abierta — cada usuario logueado
+  (incluido el admin) queda deslogueado al instante.
+- Regenerar `PATIENT_DOCUMENT_HASH_SECRET` o `IP_SALT` desincroniza los hashes
+  ya escritos en una base de datos real — deduplicación de pacientes y
+  rate-limit por IP quedan rotos de forma silenciosa e irreversible (no hay
+  "recalcular" retroactivo, los hashes viejos ya no calzan con nada nuevo).
+
+Antes de generar un solo secreto, comprueba si esto parece un despliegue ya
+en vivo:
+
+```bash
+grep -in "ejemplo\|example.org" config/deployment.config.json
+```
+
+Si esto NO devuelve nada (es decir, `deployment.config.json` ya tiene
+identidad real, no de ejemplo) **Y** ya existe un `.env`/`.prod.env` con
+secretos no-`CHANGE_ME`, o un proyecto Doppler con configs `prd`/`stg` ya
+pobladas — **detente**. No asumas que "correr este skill de nuevo" es lo
+que se te pidió solo porque alguien dijo "genera los secretos" en genérico.
+Pregúntale explícitamente al deployer: *"esto parece un despliegue que ya
+tiene identidad y secretos reales — ¿confirmas que quieres REGENERAR
+`JWT_SECRET`/`PATIENT_DOCUMENT_HASH_SECRET`/`IP_SALT`, sabiendo que
+deslogueará a todos los usuarios y romperá la deduplicación/rate-limit ya
+escrita?"*. Solo continúa si responde que sí, por escrito, en la
+conversación — esa respuesta es el registro de la decisión. Si lo que
+necesita es rotar UN secreto puntual (p.ej. un token de API filtrado), rota
+solo ese, a mano, no relances todo este skill.
+
+Este mismo guard aplica corriendo por segunda vez sobre el MISMO fork
+todavía no desplegado (p.ej. reintentando tras un error) — ahí sí es seguro
+regenerar todo, porque nada en producción depende aún de los valores
+anteriores. La señal que te dice cuál caso es este es si `deployment.config.json`
+tiene identidad real Y hay secretos ya escritos en el destino (`.env` o
+Doppler) — no la sola existencia de un `.env`/proyecto Doppler vacío o a
+medias.
 
 ## Antes de empezar
 
 - `.env` y `.env.*` (excepto `.env.example`) ya están en `.gitignore` — nunca
   los agregues a git tú mismo, y nunca imprimas su contenido completo en un
-  mensaje que pueda quedar en un log público.
+  mensaje que pueda quedar en un log público. Lo mismo aplica a cualquier
+  valor que pases por `doppler secrets set`: usa el prompt interactivo o
+  `--pipe`, nunca `--value` en la línea de comandos si hay alternativa (los
+  argumentos de un comando quedan en el historial del shell).
 - Este skill asume que `config/deployment.config.json` ya tiene los dominios
   reales (`domains.web/api/admin`) y el `contactEmail` real — si no, corre
   `disaster-configure` primero.
+- **Disciplina de nombres exactos.** Cuando un paso de abajo te pide pegar
+  una credencial que generaste en OTRO dashboard (R2, Turnstile, Resend...),
+  ese dashboard casi nunca sugiere el nombre que el código realmente lee. Un
+  lanzamiento real de este template pegó las claves de R2 bajo
+  `CLOUDFLARE_ACCESS_KEY_ID`/`CLOUDFLARE_SECRET_ACCESS_KEY` (el nombre que
+  el flujo de creación del token sugería) en vez de
+  `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` (el nombre que
+  `backend/src/lib/r2.ts` realmente lee) — el secreto "estaba puesto" pero
+  invisible para la app. Cada tabla de este skill te da el nombre EXACTO en
+  `código`; escribe ese nombre literal, nunca el que sugiera el dashboard de
+  origen, y verifica después con un `grep`/`doppler secrets get` que quedó
+  bajo ese nombre.
+
+## Dos vías de entrega: `.env` vs Doppler
+
+Los VALORES que genera este skill (sección "Qué hace" abajo) son los mismos
+sea cual sea el camino de despliegue. Lo que cambia es DÓNDE aterrizan:
+
+### Vía A — `.env`/`.prod.env` (camino `disaster-deploy-vps`)
+
+Un archivo local, gitignored, copiado al VPS por un canal seguro (`scp`,
+nunca pegado en un chat). Es la vía que documentan el resto de las secciones
+de este skill tal como están escritas — síguelas literal si tu fork usa el
+VPS.
+
+### Vía B — Doppler (camino `disaster-deploy-cloudflare`, recomendado)
+
+Cloudflare Workers no lee un `.env` — los tres Workers (frontend/API/admin)
+reciben secretos vía `wrangler secret bulk` desde variables de entorno que
+CI inyecta con `doppler run`. En vez de escribir un archivo, escribes
+directo a Doppler:
+
+1. Crea (si no existe) UN proyecto Doppler para el fork, con dos configs:
+   `prd` (producción) y `stg` (staging). Nombra el proyecto algo
+   identificable del despliegue, no genérico (`<slug-del-despliegue>`, nunca
+   reutilices el nombre de otro despliegue de este template).
+2. Cada secreto de las tablas de abajo se escribe con:
+   ```bash
+   doppler secrets set NOMBRE_EXACTO --project <tu-proyecto-doppler> --config prd
+   # (te pide el valor de forma interactiva — nunca queda en el historial)
+   ```
+   Repite para `--config stg` con SU PROPIO valor generado — nunca copies el
+   mismo secreto de `prd` a `stg` (una sesión de staging válida en
+   producción, o viceversa, es exactamente lo que este split evita).
+3. **GitHub Actions solo necesita conocer DOS secretos**, nunca los
+   individuales: un token de servicio de Doppler por config, guardado como
+   secret de repo:
+   ```bash
+   gh secret set DOPPLER_TOKEN --body "<token de servicio Doppler, config prd>"
+   gh secret set DOPPLER_TOKEN_STAGING --body "<token de servicio Doppler, config stg>"
+   ```
+   Los workflows de este template (`deploy-backend.yml`, `deploy-frontend.yml`,
+   `deploy-admin.yml`, `deploy-staging.yml`, `verify-jobs.yml`) ya están
+   escritos para leer exactamente estos dos nombres — no inventes otros.
+4. Ningún secreto individual (JWT_SECRET, credenciales de R2, tokens de
+   Cloudflare...) vive nunca en GitHub — solo en Doppler, inyectado en cada
+   paso del workflow vía `doppler run --command '...'`.
+5. Genera un token de servicio por config desde el dashboard de Doppler
+   (Project → Access → Service Tokens) o `doppler configs tokens create`,
+   con el mínimo scope (`read`, no `admin`) que cada workflow necesita.
+
+El resto de este skill (qué generar, qué secretos son `[REQ]`/`[OPT]`, el
+tratamiento aparte de Turnstile) aplica igual a ambas vías — la única
+diferencia es el comando de escritura final (`.env` con un editor/heredoc vs
+`doppler secrets set`). La tabla completa de nombres de secreto específicos
+del camino Cloudflare (`DATABASE_URL` de Neon, `R2_*`, `CLOUDFLARE_*`,
+`SMTP_*` para Resend) vive en `disaster-deploy-cloudflare` — este skill
+cubre el núcleo compartido con el camino VPS (JWT/hash/salt/admin), ese
+otro skill añade lo específico de Cloudflare/Neon/R2/Resend encima.
 
 ## Qué hace
 
@@ -111,10 +227,15 @@ los valores de identidad/dominio ya resueltos por `disaster-configure`.
    `.env.example` que no sea `[REQ]` dejado en su default (`[OPT]` sin
    configurar = comportamiento degradado documentado en el propio
    `.env.example`, no un error).
-4. Si el deployer pidió GitHub Environment secrets, súbelos con `gh secret
-   set` como en el punto 4 de arriba.
+4. Camino VPS: si el deployer pidió GitHub Environment secrets, súbelos con
+   `gh secret set` como en el punto 4 de "Qué hace". Camino Cloudflare:
+   escribe cada secreto con `doppler secrets set` en AMBAS configs
+   (`prd`/`stg`, con valores generados por separado) como en "Dos vías de
+   entrega" arriba, y crea los dos tokens de servicio
+   (`DOPPLER_TOKEN`/`DOPPLER_TOKEN_STAGING`) como secrets de GitHub.
 5. Verifica (ver abajo) y solo entonces informa al deployer que puede
-   continuar con `disaster-deploy-vps`.
+   continuar con `disaster-deploy-cloudflare` (camino Doppler) o
+   `disaster-deploy-vps` (camino `.env`).
 
 ## Verificación (obligatoria)
 
@@ -138,18 +259,45 @@ los valores de identidad/dominio ya resueltos por `disaster-configure`.
    ```bash
    git check-ignore -v .env 2>/dev/null || git check-ignore -v .prod.env
    ```
+5. **Camino Doppler únicamente** — todo `[REQ]` tiene valor no vacío en
+   AMBAS configs, y ninguno quedó con un placeholder:
+   ```bash
+   doppler secrets download --project <tu-proyecto-doppler> --config prd --no-file --format env \
+     | grep -i "change_me\|example.org\|example_" && echo "quedan placeholders en prd" || echo "prd limpio"
+   doppler secrets download --project <tu-proyecto-doppler> --config stg --no-file --format env \
+     | grep -i "change_me\|example.org\|example_" && echo "quedan placeholders en stg" || echo "stg limpio"
+   ```
+   (el primer `grep` con hallazgos imprime las líneas Y el mensaje de "quedan
+   placeholders" porque `&&` sigue al `grep`; si no hay hallazgos, `grep`
+   sale con código 1 y cae al mensaje de "limpio" del `||`.)
+6. **Camino Doppler únicamente** — `DOPPLER_TOKEN`/`DOPPLER_TOKEN_STAGING`
+   existen como secrets de GitHub, y ningún secreto individual
+   (`JWT_SECRET`, credenciales de R2, tokens de Cloudflare...) aparece
+   también ahí — solo esos dos nombres:
+   ```bash
+   gh secret list
+   ```
 
 ## Hard stop
 
 **No declares esto terminado** — ni le digas al deployer que puede avanzar a
-`disaster-deploy-vps` — mientras:
+`disaster-deploy-cloudflare`/`disaster-deploy-vps` — mientras:
+- El re-run guard de arriba no se resolvió: el despliegue parece ya estar en
+  vivo (identidad real + secretos ya escritos) y no tienes una confirmación
+  explícita y por escrito del deployer para regenerarlos.
 - Cualquier variable `[REQ]` de `.env.example` quede sin valor, o con
-  `CHANGE_ME*`/`example.org`/`example_` literal en el archivo generado.
+  `CHANGE_ME*`/`example.org`/`example_` literal en el destino generado
+  (`.env`/`.prod.env` o cualquiera de las dos configs de Doppler).
 - `POSTGRES_PASSWORD`, `JWT_SECRET`, `IP_SALT`,
   `PATIENT_DOCUMENT_HASH_SECRET`, `SEED_ADMIN_PASSWORD` o `VALKEY_PASSWORD`
   tengan menos de 16 caracteres reales de entropía (un `openssl rand` con los
   tamaños indicados arriba ya lo garantiza — si generaste a mano, revísalo).
-- El archivo generado terminó commiteado o trackeado por git.
+- El archivo generado terminó commiteado o trackeado por git, o algún
+  secreto individual (no `DOPPLER_TOKEN`/`DOPPLER_TOKEN_STAGING`) terminó
+  como secret de GitHub en el camino Doppler.
+- Un secreto quedó guardado bajo un nombre distinto del que el código
+  realmente lee (ver "Disciplina de nombres exactos" arriba) — verificado,
+  no asumido.
 - **`TURNSTILE_SECRET_KEY`/`NEXT_PUBLIC_TURNSTILE_SITE_KEY` están vacías Y el
   deployer no dio una autorización explícita por escrito para ir a
   producción sin anti-bot.** No lo asumas ni lo decidas tú: si el deployer
@@ -161,5 +309,6 @@ los valores de identidad/dominio ya resueltos por `disaster-configure`.
 
 ## Siguiente paso
 
-Con `.env`/`.prod.env` completo y verificado, continúa con
-`disaster-deploy-vps`.
+Con los secretos completos y verificados, continúa con
+`disaster-deploy-cloudflare` (si escribiste a Doppler) o `disaster-deploy-vps`
+(si escribiste `.env`/`.prod.env`).

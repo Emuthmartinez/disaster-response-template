@@ -106,7 +106,15 @@ const filenameCaseConfig = {
 /** @type {import("eslint").Linter.Config[]} */
 const config = [
   {
-    ignores: ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/build/**"],
+    ignores: [
+      "**/node_modules/**",
+      "**/.next/**",
+      "**/dist/**",
+      "**/build/**",
+      // Salida generada del adaptador OpenNext -> Workers (no es código fuente).
+      "**/.open-next/**",
+      "**/.wrangler/**",
+    ],
   },
   js.configs.recommended,
   ...nextConfig,

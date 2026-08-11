@@ -12,6 +12,22 @@
 # un proxy delante), reemplaza el bloque `tls` de cada sitio por
 # `tls /etc/caddy/certs/<dominio>.crt /etc/caddy/certs/<dominio>.key`.
 #
+# CLOUDFLARE DELANTE DE ESTE VPS (opcional — ver infra/cloudflare/):
+# si pones el registro DNS del sitio en proxy naranja de Cloudflare con
+# `always_use_https` activo (el default de infra/cloudflare/settings.tf),
+# Cloudflare responde 301 al reto HTTP-01 de Let's Encrypt ANTES de que
+# llegue a Caddy — el origen nunca consigue emitir su propio certificado
+# mientras el registro esté proxied, y Caddy se queda reintentando ACME sin
+# avanzar. Dos salidas:
+#   a) usa un Cloudflare Origin CA cert (15 años, no requiere ACME/puerto 80
+#      abierto al mundo) — descomenta el bloque `tls` del snippet
+#      `cf_origin_tls` de abajo tras copiar el par de claves al VPS
+#   b) emite el certificado con el registro en DNS-only (nube gris) y pasa a
+#      proxied recién después
+# Mientras Cloudflare esté en modo Full (no strict) y el registro NO esté
+# proxied todavía, Let's Encrypt HTTP-01 funciona normal — este problema
+# solo aparece cuando el proxy naranja ya está activo antes de tener cert.
+#
 # Todos los sitios anteponen cabeceras de seguridad (defensa en profundidad
 # junto a helmet en backend y Next headers en frontend). CSP la sirve Next.js.
 
@@ -30,11 +46,21 @@
 	}
 }
 
+# Cloudflare Origin CA cert — snippet opcional, comentado por defecto. Solo
+# tiene efecto si generas el par en el panel de Cloudflare (o con
+# `cloudflare_origin_ca_certificate` en infra/cloudflare/), lo copias a
+# /etc/caddy/certs/origin.{crt,key} en el VPS, y descomentas la línea `tls`.
+# Ver el aviso de arriba sobre el orden correcto frente a Let's Encrypt.
+(cf_origin_tls) {
+	# tls /etc/caddy/certs/origin.crt /etc/caddy/certs/origin.key
+}
+
 # Sitio público (frontend). Sirve /_next/static con cache larga (assets
 # versionados por build id) y sin cache el resto (HTML/SSR).
 {$WEB_DOMAIN}, www.{$WEB_DOMAIN} {
 	encode zstd gzip
 	import security_headers
+	import cf_origin_tls
 
 	@nextStatic path /_next/static/*
 	header @nextStatic Cache-Control "public, max-age=31536000, immutable"
@@ -46,9 +72,16 @@
 }
 
 # API (backend). Reenvía la IP real del cliente para rate-limit/hashing por IP.
+#
+# Si Cloudflare proxea este origen, la cabecera NO falsificable por el
+# cliente es CF-Connecting-IP (Cloudflare la reescribe en cada hop), NUNCA
+# X-Forwarded-For. En ese caso pon TRUSTED_IP_HEADER=cf-connecting-ip en el
+# backend (ver .env.example) — configurarlo sin que Cloudflare esté de
+# verdad delante deja que cualquier cliente falsifique su IP.
 {$API_DOMAIN} {
 	encode zstd gzip
 	import security_headers
+	import cf_origin_tls
 
 	reverse_proxy backend:8080 {
 		header_up X-Real-IP {remote_host}
@@ -60,6 +93,7 @@
 {$ADMIN_DOMAIN} {
 	encode zstd gzip
 	import security_headers
+	import cf_origin_tls
 
 	reverse_proxy admin:3000
 }

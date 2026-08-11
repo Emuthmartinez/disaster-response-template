@@ -1,0 +1,25 @@
+# Nunca commitear: valores reales de un despliegue concreto.
+terraform.tfvars
+
+# Estado de OpenTofu/Terraform: puede contener valores sensibles en texto
+# plano incluso para recursos "no secretos" (Cloudflare a veces devuelve
+# tokens/IDs internos en el state). Va a un backend remoto en cuanto haya
+# más de una persona aplicando (ver README, "Estado").
+*.tfstate
+*.tfstate.*
+
+# .terraform.lock.hcl SÍ se commitea a propósito (fija versiones de
+# provider, evita que un `tofu init` futuro traiga una versión distinta sin
+# avisar) — solo se ignora el directorio de plugins descargados.
+.terraform/
+
+# Planes guardados (`tofu plan -out=...`). Pueden incluir valores sensibles
+# en claro y quedan obsoletos en cuanto cambia el state; nunca se commitean.
+tfplan*
+*.tfplan
+
+certs/
+*.key
+*.crt
+.env
+.env.local

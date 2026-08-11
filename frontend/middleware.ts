@@ -1,15 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { apiHostPrefix, matchesApiHost } from "./lib/api-host";
+import { deploymentConfig } from "./lib/deployment-config";
 
 // El tier `api` (api.<dominio>) y el tier `web` corren el MISMO
 // image de Next.js (un solo server.js sirve páginas + /api). En el host de la
 // API NO queremos servir el frontend: es una superficie de API para terceros,
 // no un sitio. Este middleware devuelve 404 a cualquier ruta que no sea /api/*
-// cuando la petición llega por un host `api.*`.
+// cuando la petición llega por un host del tier API.
 //
 // Se decide por el HOST de la request (no por el pod): ambos tiers son el mismo
 // binario, así que la única señal fiable de "esto es la API" es el hostname.
-// Cubre api.<dominio> (config/deployment.config.json → domains.api) y
-// cualquier api.* de staging.
+// El prefijo se DERIVA de config/deployment.config.json → domains.api (no un
+// literal "api." hardcodeado) para que un despliegue con otro nombre de
+// subdominio siga funcionando sin tocar este fichero. Cubre además
+// `<prefijo>-staging.` (hermano de `<prefijo>.`, ver lib/api-host.ts).
 //
 // Excepciones que SÍ pasan aunque no sean /api/*:
 //   - /api/*        : la superficie real (incluye /api/readyz del health-check
@@ -18,10 +22,10 @@ import { NextResponse, type NextRequest } from "next/server";
 //                     se permiten por si assetPrefix está vacío en algún entorno).
 //   - /favicon.ico, /robots.txt : ruido inofensivo de navegadores/crawlers.
 
+const API_HOST_PREFIX = apiHostPrefix(deploymentConfig.domains.api);
+
 function isApiHost(host: string | null): boolean {
-  if (!host) return false;
-  // host puede venir con puerto (api.localhost:3000) → basta el prefijo.
-  return host.startsWith("api.");
+  return matchesApiHost(host, API_HOST_PREFIX);
 }
 
 const ALLOWED_NON_API = ["/_next/", "/favicon.ico", "/robots.txt"];

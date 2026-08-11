@@ -25,6 +25,10 @@ export type CrudVerb = (typeof CRUD_VERBS)[number];
 export const MODELS: { key: string; category: string; label: string }[] = [
   { key: "report", category: "reports", label: "Reportes de emergencia" },
   { key: "missing", category: "missing", label: "Personas desaparecidas" },
+  // Modelo aparte de `missing`: son tablas distintas a propósito (ver
+  // services/pets.ts), así que también son permisos distintos — se puede dar
+  // acceso a mascotas sin darlo a los datos de personas, que son más sensibles.
+  { key: "pet", category: "missing", label: "Mascotas desaparecidas" },
   { key: "hospital", category: "hospitals", label: "Hospitales" },
   { key: "patient", category: "hospitals", label: "Pacientes de hospital" },
   { key: "donation", category: "donations", label: "Donaciones / acopio" },
@@ -69,6 +73,22 @@ export const CROSS_CUTTING: { key: string; category: string; description: string
   // se exige incluso al admin semilla, que debe tener además el flag de super
   // admin (users.is_super_admin). Ver MIRROR_MANAGE + userHasCapability.
   { key: "mirror:manage", category: "auth", description: "Emitir/revocar acceso a la réplica pública (SQL hub)" },
+  // Solicitudes de eliminación de datos: gestionar las peticiones ciudadanas de
+  // supresión (derecho de los titulares de datos — GDPR, CCPA, Ley 1581 en
+  // Colombia u otra norma aplicable según la jurisdicción del despliegue). Dos
+  // claves (no CRUD completo, ver dataDeletionRequests/data-deletion.ts): leerlas
+  // ya es sensible (PII de quien solicita) y resolverlas es una decisión
+  // operativa aparte.
+  {
+    key: "deletion:read",
+    category: "privacy",
+    description: "Ver solicitudes de eliminación de datos",
+  },
+  {
+    key: "deletion:edit",
+    category: "privacy",
+    description: "Resolver/rechazar solicitudes de eliminación de datos",
+  },
 ];
 
 /** Capacidad que gobierna el acceso a la réplica pública. Gateada a super admin. */

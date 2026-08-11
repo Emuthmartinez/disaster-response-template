@@ -1670,3 +1670,54 @@ export async function listRestrictedSupplySnapshotsForHospitals(
 ): Promise<Map<string, RestrictedHospitalSupplySnapshot>> {
   return loadRestrictedSupplyForHospitalIds(hospitalIds);
 }
+
+// ============================================================================
+// Bitácora de insumos (hospital_supply_events) — lectura para el panel admin
+// ============================================================================
+
+export interface HospitalSupplyEventEntry {
+  id: string;
+  hospitalId: string;
+  category: string | null;
+  entityType: string;
+  entityId: string | null;
+  action: string;
+  actor: string;
+  source: string;
+  payload: unknown;
+  createdAt: number;
+}
+
+export const MAX_SUPPLY_EVENTS_LIMIT = 200;
+
+/**
+ * Últimos eventos de insumos de un hospital, más reciente primero. Superficie
+ * restringida (capability-gated): el payload puede incluir notas restringidas,
+ * igual que el snapshot restringido que ya ve el mismo caller.
+ */
+export async function listHospitalSupplyEvents(
+  hospitalId: string,
+  limit = 50,
+): Promise<HospitalSupplyEventEntry[]> {
+  const db = await getDb();
+  const capped = Math.min(Math.max(1, Math.trunc(limit)), MAX_SUPPLY_EVENTS_LIMIT);
+  const rows = await db
+    .select()
+    .from(hospitalSupplyEvents)
+    .where(eq(hospitalSupplyEvents.hospitalId, hospitalId))
+    .orderBy(desc(hospitalSupplyEvents.createdAt))
+    .limit(capped);
+  // DTO explícito (allowlist), nunca la fila cruda.
+  return rows.map((row) => ({
+    id: row.id,
+    hospitalId: row.hospitalId,
+    category: row.category,
+    entityType: row.entityType,
+    entityId: row.entityId,
+    action: row.action,
+    actor: row.actor,
+    source: row.source,
+    payload: row.payload,
+    createdAt: row.createdAt,
+  }));
+}

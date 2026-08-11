@@ -9,7 +9,18 @@
  * missing a required key, or carrying an extra/unknown key, fails the build
  * loudly instead of silently shipping a half-configured site.
  */
-import rawConfig from "../../config/deployment.config.json";
+// Copia local de `config/deployment.config.json` (raiz del repo), generada por
+// el script `prebuild` de este paquete. La fuente de verdad sigue siendo la de
+// la raiz; esto es solo una copia de build, gitignorada (frontend/.gitignore).
+//
+// Por que no se importa directamente de `../../config/`: ese path se sale del
+// paquete `frontend/`. Al empaquetar para Cloudflare Workers,
+// @opennextjs/cloudflare fija `outputFileTracingRoot` a `frontend/`, y un
+// import fuera de esa raiz falla ("Can't resolve '../../config/...'"). Alinear
+// las raices tampoco vale: Next pasa a emitir `.next/standalone/frontend/...`
+// (layout de monorepo) y el adaptador no lo encuentra. Ver
+// scripts/sync-deployment-config.mjs.
+import rawConfig from "../config/deployment.config.json";
 
 export interface DeploymentDomains {
   web: string;
@@ -30,6 +41,20 @@ export interface DeploymentConfig {
   languageTag: string;
   contactEmail: string;
   domains: DeploymentDomains;
+  /**
+   * Numero de emergencia primario a mostrar en estados vacios/de ayuda
+   * (p.ej. "todavia no hay hospitales cargados, si es una emergencia llama
+   * al ..."). OPCIONAL: sin el, la UI cae a lib/emergency-contacts.ts (el
+   * primer contacto del primer grupo) en vez de a un numero hardcodeado.
+   */
+  emergencyNumber?: string;
+  /**
+   * Bounding box inicial del mapa [south, west, north, east], usado para el
+   * encuadre inicial (p.ej. centrar en el epicentro + su area de impacto) en
+   * vez de solo mapCenter/mapZoom. OPCIONAL: sin el, el mapa usa mapCenter +
+   * mapZoom como hasta ahora.
+   */
+  mapBbox?: [number, number, number, number];
 }
 
 const REQUIRED_KEYS = [
@@ -44,6 +69,9 @@ const REQUIRED_KEYS = [
   "contactEmail",
   "domains",
 ] as const;
+
+const OPTIONAL_KEYS = ["emergencyNumber", "mapBbox"] as const;
+const ALLOWED_KEYS = [...REQUIRED_KEYS, ...OPTIONAL_KEYS] as const;
 
 const REQUIRED_DOMAIN_KEYS = ["web", "api", "admin"] as const;
 
@@ -68,12 +96,12 @@ function validateDeploymentConfig(value: unknown): DeploymentConfig {
 
   const keys = Object.keys(value);
   const unknownKeys = keys.filter(
-    (key) => !REQUIRED_KEYS.includes(key as (typeof REQUIRED_KEYS)[number]),
+    (key) => !ALLOWED_KEYS.includes(key as (typeof ALLOWED_KEYS)[number]),
   );
   if (unknownKeys.length > 0) {
     fail(
       `Unknown key(s) in config/deployment.config.json: ${unknownKeys.join(", ")}. ` +
-        `Allowed keys are: ${REQUIRED_KEYS.join(", ")}.`,
+        `Allowed keys are: ${ALLOWED_KEYS.join(", ")}.`,
     );
   }
   const missingKeys = REQUIRED_KEYS.filter((key) => !(key in value));
@@ -134,6 +162,26 @@ function validateDeploymentConfig(value: unknown): DeploymentConfig {
   for (const key of REQUIRED_DOMAIN_KEYS) {
     if (typeof domains[key] !== "string" || domains[key] === "") {
       fail(`"domains.${key}" must be a non-empty string.`);
+    }
+  }
+
+  if ("emergencyNumber" in value) {
+    if (
+      typeof value.emergencyNumber !== "string" ||
+      value.emergencyNumber === ""
+    ) {
+      fail('"emergencyNumber" must be a non-empty string when present.');
+    }
+  }
+
+  if ("mapBbox" in value) {
+    const bbox = value.mapBbox;
+    if (
+      !Array.isArray(bbox) ||
+      bbox.length !== 4 ||
+      !bbox.every((n) => typeof n === "number" && Number.isFinite(n))
+    ) {
+      fail('"mapBbox" must be a [south, west, north, east] tuple of four finite numbers.');
     }
   }
 
