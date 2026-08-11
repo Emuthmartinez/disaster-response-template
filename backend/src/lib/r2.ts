@@ -108,14 +108,31 @@ export async function deleteR2Url(url: string): Promise<boolean> {
   return true;
 }
 
+// Techo del GET a R2: este fetch está en el camino CALIENTE de cada foto
+// (getMissingPhoto y equivalentes lo esperan inline antes de responder). Sin
+// límite, un R2 lento colgaba la respuesta de la foto tanto como tardara el
+// SDK; el service worker del frontend corta a los 8s, así que más allá de eso
+// solo se acumula espera que nadie va a consumir. Timeout → catch → null →
+// el caller cae al redirect 302 al CDN, que sí responde.
+const R2_GET_TIMEOUT_MS = 5_000;
+
 /**
  * Descarga un objeto de R2 y devuelve sus bytes + contentType.
- * Null si no existe, falla o es inaccesible — el caller decide el fallback.
+ * Null si no existe, falla, tarda más de R2_GET_TIMEOUT_MS o es inaccesible —
+ * el caller decide el fallback.
  */
 export async function getObject(
   key: string,
 ): Promise<{ contentType: string; buffer: Buffer } | null> {
-  try {
+  // Promise.race con clearTimeout en finally, mismo patrón que el readyz de
+  // server.ts: si el GET gana la carrera no queda un timer vivo por request.
+  // (La carrera abandona el request del SDK en vez de cancelarlo — igual que
+  // readyz; si los timeouts de R2 se vuelven frecuentes, el paso siguiente es
+  // un AbortController vía requestHandler del S3Client.)
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // La carrera envuelve send() Y la lectura del Body: send() resuelve al llegar
+  // las cabeceras, así que un body que gotea también debe caer bajo el techo.
+  const download = async () => {
     const resp = await s3().send(
       new GetObjectCommand({
         Bucket: r2Env("R2_STATIC_BUCKET"),
@@ -132,8 +149,21 @@ export async function getObject(
       contentType: resp.ContentType ?? "application/octet-stream",
       buffer: Buffer.concat(chunks),
     };
+  };
+  try {
+    return await Promise.race([
+      download(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("r2: getObject timeout")),
+          R2_GET_TIMEOUT_MS,
+        );
+      }),
+    ]);
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

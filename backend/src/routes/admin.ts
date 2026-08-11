@@ -17,6 +17,7 @@ import * as contactSvc from "@/services/contact";
 import * as reportsSvc from "@/services/reports";
 import * as chatSvc from "@/services/chat";
 import * as missingSvc from "@/services/missing";
+import * as petsSvc from "@/services/pets";
 import * as syncSvc from "@/services/sync";
 import * as hospitalsSvc from "@/services/hospitals";
 import type {
@@ -193,10 +194,14 @@ adminRouter.get(
   rateLimit({ scope: "admin:data", limit: 120 }),
   requireAdmin,
   asyncHandler(async (_req, res) => {
-    const [reports, messages, people, syncRuns, syncState] = await Promise.all([
+    const [reports, messages, people, pets, syncRuns, syncState] = await Promise.all([
       reportsSvc.listReports(),
       chatSvc.listMessages(),
       missingSvc.listMissing({ includeFound: true }),
+      // Mascotas: lista APARTE. No se mezcla con `people` ni se suma a
+      // stats.missing — el panel tiene que poder moderar reportes de mascotas
+      // sin que eso altere el conteo de personas desaparecidas.
+      petsSvc.listPets({ includeFound: true }),
       syncSvc.listSyncRuns(15),
       syncSvc.listSyncState(),
     ]);
@@ -221,6 +226,9 @@ adminRouter.get(
     const peopleWithPhoto = people.filter((p) => p.photoUrl).length;
     const peopleFound = people.filter((p) => p.status === "found").length;
     const peopleActive = people.length - peopleFound;
+    const petsWithPhoto = pets.filter((p) => p.photoUrl).length;
+    const petsFound = pets.filter((p) => p.status === "found").length;
+    const petsActive = pets.length - petsFound;
 
     res.set(NO_STORE).json({
       generatedAt: now,
@@ -241,10 +249,17 @@ adminRouter.get(
           found: peopleFound,
           withPhoto: peopleWithPhoto,
         },
+        pets: {
+          total: pets.length,
+          active: petsActive,
+          found: petsFound,
+          withPhoto: petsWithPhoto,
+        },
       },
       reports,
       messages,
       people,
+      pets,
       sync: { runs: syncRuns, state: syncState },
     });
   }),

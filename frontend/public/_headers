@@ -1,0 +1,17 @@
+# Cabeceras para los assets que sirve Workers Assets DIRECTAMENTE (sw.js,
+# favicons, manifest, /_next/static tras el build): esas respuestas nunca pasan
+# por el Worker de Next, así que el headers() de next.config.ts no las alcanza.
+# Mismo formato que Cloudflare Pages; OpenNext copia public/ a .open-next/assets
+# y wrangler lo recoge de ahí.
+#
+# Se declaran SOLO las cabeceras de hardening estáticas de next.config.ts
+# (securityHeaders). La CSP se queda fuera A PROPÓSITO: duplicar aquí la
+# política completa crearía una segunda fuente de verdad que derivaría en
+# silencio respecto a next.config.ts — y los assets (imágenes, js, json) no
+# ejecutan documentos donde esa CSP aplique.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: microphone=(), payment=(), usb=(), interest-cohort=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains

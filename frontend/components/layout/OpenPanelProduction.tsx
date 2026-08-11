@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { OpenPanelComponent } from "@openpanel/nextjs";
 import { apiUrl } from "@/lib/api";
 import { deploymentConfig } from "@/lib/deployment-config";
@@ -12,8 +13,20 @@ export default function OpenPanelProduction({
 }: {
   clientId: string;
 }) {
-  if (typeof window === "undefined") return null;
-  if (window.location.hostname !== PRODUCTION_HOST) return null;
+  // El chequeo de hostname va en un efecto, NO en el render: decidir el árbol
+  // con `typeof window` hace que el servidor pinte null y el cliente pinte el
+  // componente en el MISMO primer render → mismatch de hidratación (React #418)
+  // en CADA carga. Con el gate de montaje (mismo patrón que
+  // useLowBandwidthMode) ambos primeros renders son null y el script de
+  // analítica se monta un tick después, sin perder eventos.
+  const [shouldRender, setShouldRender] = useState(false);
+  useEffect(() => {
+    // setState aquí es intencional (gate de montaje, una sola vez): el hostname
+    // solo existe en el cliente y leerlo durante el render rompe la hidratación.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setShouldRender(window.location.hostname === PRODUCTION_HOST);
+  }, []);
+  if (!shouldRender) return null;
 
   return (
     <OpenPanelComponent

@@ -65,8 +65,23 @@ despliegue.
    git switch -c fix/descripcion-corta upstream/staging
    ```
 
-   > Si el proyecto promueve `staging` → `main`, documenta ese flujo en
-   > `docs/architecture.md` o en un runbook de despliegue.
+   > **Modelo de ramas recomendado: `feature` → `staging` → `main`.** Si tu
+   > fork usa el Camino A de despliegue (Cloudflare — ver `CLAUDE.md`), ya
+   > trae `.github/workflows/deploy-staging.yml`, que despliega los tres
+   > tiers automáticamente en cada push a `staging` — es justo el motivo de
+   > que exista esa rama: probar un cambio de API contra un entorno real
+   > antes de que llegue a `main` (donde el backend y el admin son
+   > deliberadamente manuales). El flujo: abre tu rama de feature desde
+   > `staging`, mergea a `staging` primero, verifica ahí, y solo entonces
+   > mergea `staging` → `main`. Antes de ese último merge, revisa
+   > explícitamente qué otros commits viajan con él — un merge amplio puede
+   > llevar a producción trabajo de otra rama que todavía no estaba listo
+   > (ver AGENTS.md → "Trabajo con múltiples agentes").
+   >
+   > Si tu fork usa solo el Camino B (VPS) y no tiene una rama `staging`
+   > wireada a ningún deploy automático, trabajar directo contra `main` con
+   > PRs pequeños sigue siendo válido — el modelo de arriba es el default
+   > recomendado, no una obligación para todo despliegue.
 
 5. Corre la app. Docker Compose es la vía preferida y levanta el stack completo
    (frontend + admin + backend + Postgres + Valkey) sin instalar dependencias a
@@ -92,6 +107,33 @@ despliegue.
 Si eres maintainer, puedes crear una rama en el repo principal, pero conserva
 la misma disciplina: rama descriptiva, PR pequeño, issue enlazada y
 validación clara.
+
+### Al pasar de plantilla a despliegue real (go-live)
+
+Dos decisiones del content-audit se registran como archivos commiteados (no
+como variables de entorno) para que queden en `git diff` y sobrevivan a
+cualquier shell. Ambas son parte del flujo estándar de fork/renombre, y el
+detalle completo vive en `.claude/skills/disaster-content-audit/SKILL.md`:
+
+1. **Chequeo único de historial git.** La primera corrida de
+   `scripts/content-audit/run.sh` en tu fork verifica que el historial sea
+   pequeño y reciente (que no se haya colado el historial de otro repo/otra
+   crisis) y borra `scripts/content-audit/.content-audit-fresh` del working
+   tree. Commitea ese borrado para que el chequeo no vuelva a pedirse:
+
+   ```bash
+   git rm scripts/content-audit/.content-audit-fresh
+   ```
+
+2. **Modo deployment.** Cuando tu despliegue ya pasó por `disaster-brand` y
+   commitea sus propios assets de marca, cambia el modo del audit para que
+   dejen de saltar como hallazgos (las reglas de PII/secretos/crisis previa
+   siguen activas igual):
+
+   ```bash
+   printf 'deployment\n' > scripts/content-audit/mode
+   git add scripts/content-audit/mode
+   ```
 
 ## Crear issues útiles
 

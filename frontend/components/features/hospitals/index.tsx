@@ -204,6 +204,7 @@ export default function Hospitals() {
           loading={loading}
           error={error}
           visible={visible}
+          total={hospitals.length}
         />
       )}
     </section>

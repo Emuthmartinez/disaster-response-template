@@ -11,6 +11,7 @@ import { isR2Configured } from "@/lib/r2";
 import { mountPublicApi } from "@/public-api";
 import { buildOpenApiSpec } from "@/lib/swagger";
 import { missingRouter } from "@/routes/missing";
+import { petsRouter } from "@/routes/pets";
 import { reportsRouter } from "@/routes/reports";
 import { chatRouter } from "@/routes/chat";
 import { hospitalsRouter } from "@/routes/hospitals";
@@ -166,6 +167,9 @@ mountPublicApi(app);
 
 // Rutas. (Reference endpoint ahora; el resto las añade el workflow de port.)
 app.use("/api/missing", missingRouter);
+// Mascotas. Tabla y consultas PROPIAS (missing_pets): montar esto no puede
+// alterar el conteo ni el listado de personas desaparecidas. Ver services/pets.ts.
+app.use("/api/pets", petsRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/chat", chatRouter);
 app.use("/api/hospitals", hospitalsRouter);
@@ -202,8 +206,27 @@ app.use(errorHandler);
 export { app };
 
 import { fileURLToPath } from "url";
-const isEntrypoint = process.argv[1] === fileURLToPath(import.meta.url);
-if (isEntrypoint) {
+
+// ¿Se está ejecutando este módulo como entrypoint de Node?
+//
+// En Cloudflare Workers no hay `process.argv` ni `import.meta.url` utilizable, y
+// `fileURLToPath(undefined)` lanza ("The 'path' argument must be of type string
+// or an instance of URL"). Al estar en ámbito de módulo, esa excepción tumbaba
+// el import de este archivo y con él TODA la API (1101 en cada ruta).
+//
+// Bajo Workers la respuesta correcta es simplemente "no": el listen() y el
+// servidor de métricas los arranca solo Node; el Worker importa `app` y la
+// sirve con httpServerHandler (ver src/worker.ts).
+function isNodeEntrypoint(): boolean {
+  try {
+    if (!import.meta.url || !Array.isArray(process.argv)) return false;
+    return process.argv[1] === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isNodeEntrypoint()) {
   app.listen(env.PORT, () => {
     console.log(`mapa-backend escuchando en :${env.PORT}`);
   });

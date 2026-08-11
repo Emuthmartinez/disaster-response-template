@@ -1,10 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import PrivacyConsentModal from "@/components/content/PrivacyConsentModal";
 import { PRIVACY_CONSENT_STORAGE_KEY } from "@/lib/privacy-policy";
-
-const OVERLAY_SELECTOR = "[data-privacy-gate-overlay]";
 
 function hasStoredConsent(): boolean {
   try {
@@ -14,115 +19,95 @@ function hasStoredConsent(): boolean {
   }
 }
 
+interface PrivacyConsentApi {
+  /**
+   * Pide consentimiento ANTES de enviar datos. Si ya se dio, resuelve `true` sin
+   * mostrar nada. Si no, abre el modal y resuelve cuando el usuario decide:
+   * `true` si acepta, `false` si cierra sin aceptar (entonces NO se envia).
+   */
+  ensureConsent: () => Promise<boolean>;
+  /** ¿Hay consentimiento guardado? Para pintar avisos, no como control. */
+  hasConsent: () => boolean;
+}
+
+const PrivacyConsentContext = createContext<PrivacyConsentApi>({
+  ensureConsent: async () => true,
+  hasConsent: () => false,
+});
+
+export function usePrivacyConsent(): PrivacyConsentApi {
+  return useContext(PrivacyConsentContext);
+}
+
 /**
- * Gate de consentimiento de privacidad + trampa anti-manipulación.
+ * Consentimiento de privacidad, exigido al ENVIAR datos — no al leer.
  *
- * Envuelve el contenido de la página. Mientras el consentimiento está PENDIENTE,
- * muestra el modal (overlay a pantalla completa). Si alguien intenta saltarse el
- * gate borrando el overlay desde el inspector (DevTools), lo detectamos con un
- * MutationObserver y RETIRAMOS todo el contenido (children) reemplazándolo por un
- * aviso de bloqueo — "si borras el modal, se borra la landing".
+ * POR QUE CAMBIO (importa, no es cosmetica):
  *
- * ⚠️ ALCANCE HONESTO: esto es un DISUASIVO de UX/legal, no un control de
- * seguridad. Cualquier control en el cliente es evitable (desactivar JS, editar
- * el estado de React, bloquear el observer, o llamar a la API directo). La
- * aplicación REAL del consentimiento y del anti-abuso vive en el backend
- * (Turnstile + rate-limit + validación por endpoint). Esto solo sube el costo de
- * la manipulación trivial desde el navegador.
+ * Antes esto era un overlay a pantalla completa que aparecia al cargar y tapaba
+ * el sitio entero hasta que la persona se desplazaba por toda la politica y
+ * aceptaba. En un sitio de respuesta a un terremoto eso significa que alguien
+ * buscando a un familiar, o los telefonos de emergencia, o el mapa del
+ * epicentro, tenia que leerse un documento legal primero. Ese es exactamente el
+ * momento en que la gente cierra la pestaña.
+ *
+ * La obligacion legal es dar consentimiento informado antes de PUBLICAR datos
+ * personales — no antes de leer informacion publica de emergencia. Asi que el
+ * gate se mueve al punto de envio:
+ *
+ *   - Leer (mapa, telefonos, hospitales, acopio, guia): sin friccion.
+ *   - Enviar (reportes, personas desaparecidas, necesidades, contacto, chat):
+ *     `ensureConsent()` antes del submit; si no acepta, no se envia.
+ *
+ * Se conserva el requisito de desplazarse hasta el final antes de habilitar el
+ * boton: cuando el modal aparece, aparece completo.
+ *
+ * ALCANCE HONESTO: sigue siendo un control de cliente, evitable. La aplicacion
+ * real del anti-abuso vive en el backend (rate-limit, validacion por endpoint y
+ * Turnstile cuando este reactivado). Se retiro la "trampa anti-manipulacion"
+ * que borraba la landing si alguien quitaba el overlay con DevTools: castigaba
+ * a quien inspecciona la pagina y no frenaba a nadie que llame la API directo,
+ * y con el modal ya fuera del camino de lectura no tiene nada que proteger.
  */
 export default function PrivacyConsentGate({ children }: { children: ReactNode }) {
-  // Modal visible (consentimiento pendiente). Arranca en false para que el SSR y
-  // el primer render pinten la landing normal (SEO / no romper first paint); el
-  // efecto de abajo lo abre tras montar si no hay consentimiento guardado.
   const [open, setOpen] = useState(false);
-  // Manipulación detectada → se retira la landing y se muestra el aviso.
-  const [blocked, setBlocked] = useState(false);
+  // Resolver de la promesa que espera el formulario que pidio consentimiento.
+  const pendingRef = useRef<((granted: boolean) => void) | null>(null);
 
-  // Refs para que el observer no dependa de re-renders:
-  const grantedRef = useRef(false); // el usuario aceptó (cierre legítimo)
-  const seenOverlayRef = useRef(false); // el overlay llegó a existir en el DOM
+  const settle = useCallback((granted: boolean) => {
+    const resolve = pendingRef.current;
+    pendingRef.current = null;
+    setOpen(false);
+    resolve?.(granted);
+  }, []);
 
-  useEffect(() => {
-    if (hasStoredConsent()) {
-      grantedRef.current = true;
-      return;
-    }
-    const id = requestAnimationFrame(() => setOpen(true));
-    return () => cancelAnimationFrame(id);
+  const ensureConsent = useCallback(() => {
+    if (hasStoredConsent()) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      // Si ya habia otra peticion abierta, se cancela: solo un envio a la vez.
+      pendingRef.current?.(false);
+      pendingRef.current = resolve;
+      setOpen(true);
+    });
   }, []);
 
   const handleAccept = useCallback(() => {
     try {
       localStorage.setItem(PRIVACY_CONSENT_STORAGE_KEY, "1");
     } catch {
-      // Si localStorage falla, cerramos igual para no bloquear en entornos restringidos.
+      // Si localStorage falla (modo privado, storage bloqueado) igual seguimos:
+      // la persona acepto, y volver a preguntarle en el siguiente envio es
+      // preferible a impedirle reportar.
     }
-    grantedRef.current = true; // marca ANTES de cerrar: el observer ignora el unmount legítimo
-    setOpen(false);
-  }, []);
+    settle(true);
+  }, [settle]);
 
-  // Trampa anti-manipulación: activa solo mientras el modal debe estar abierto.
-  useEffect(() => {
-    if (!open) return;
-    if (typeof MutationObserver === "undefined") return;
-
-    const overlayPresent = () => document.querySelector(OVERLAY_SELECTOR) !== null;
-    let raf = 0;
-
-    const evaluate = () => {
-      if (grantedRef.current) return; // cierre legítimo por aceptar
-      if (overlayPresent()) {
-        seenOverlayRef.current = true; // el overlay ya se pintó (portal montado)
-        return;
-      }
-      // El overlay NO está. Solo es manipulación si ANTES llegó a existir (evita
-      // falsos positivos en el gap inicial entre setOpen(true) y el portal).
-      if (!seenOverlayRef.current) return;
-      // Confirma en el siguiente frame (descarta parpadeos transitorios del DOM).
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        if (!grantedRef.current && !overlayPresent()) setBlocked(true);
-      });
-    };
-
-    const observer = new MutationObserver(evaluate);
-    observer.observe(document.body, { childList: true, subtree: true });
-    // Chequeo inicial por si el portal ya montó antes de conectar el observer.
-    evaluate();
-
-    return () => {
-      observer.disconnect();
-      cancelAnimationFrame(raf);
-    };
-  }, [open]);
-
-  if (blocked) {
-    return (
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        className="fixed inset-0 z-[2147483647] flex flex-col items-center justify-center gap-4 bg-slate-950 px-6 text-center text-slate-100"
-      >
-        <h1 className="text-xl font-bold sm:text-2xl">Contenido no disponible</h1>
-        <p className="max-w-md text-sm text-slate-300">
-          Se detectó una manipulación de la página. Para usar el sitio debes
-          aceptar la Política de Privacidad. Recarga la página para continuar.
-        </p>
-        <button
-          type="button"
-          onClick={() => location.reload()}
-          className="rounded-xl bg-sky-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-sky-500"
-        >
-          Recargar página
-        </button>
-      </div>
-    );
-  }
+  const handleDismiss = useCallback(() => settle(false), [settle]);
 
   return (
-    <>
+    <PrivacyConsentContext.Provider value={{ ensureConsent, hasConsent: hasStoredConsent }}>
       {children}
-      <PrivacyConsentModal open={open} onAccept={handleAccept} />
-    </>
+      <PrivacyConsentModal open={open} onAccept={handleAccept} onDismiss={handleDismiss} />
+    </PrivacyConsentContext.Provider>
   );
 }

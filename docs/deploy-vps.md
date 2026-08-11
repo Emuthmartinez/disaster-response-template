@@ -1,5 +1,23 @@
 # Desplegar en un VPS
 
+> **Este es el Camino B (alternativo) de despliegue — ver `CLAUDE.md` → "Dos
+> caminos de despliegue".** El Camino A (Cloudflare Workers + Neon + Doppler,
+> primario para un despliegue nuevo) está documentado en
+> [`docs/runbook-cloudflare-launch.md`](runbook-cloudflare-launch.md). Elige
+> este camino (B) si necesitas que corran a la vez colas BullMQ,
+> transacciones interactivas de Postgres y el panel `admin/` sin adaptación,
+> si prefieres no depender de Cloudflare/Neon, o si ya tienes
+> infraestructura VPS operando.
+>
+> **Antes de seguir cualquier paso de este documento sobre un despliegue que
+> ya existe: confirma primero, contra el estado real, que este es de verdad
+> el camino que sirve tu sitio hoy.** Si tu fork migró al Camino A después de
+> haber usado este runbook, seguir un paso de aquí (p.ej. crear un registro
+> DNS apuntando al VPS) puede redirigir tráfico de producción a un servidor
+> que ya no es el que sirve el sitio, silenciosamente. Verifica con
+> `dig`/`curl -I` (ver `docs/runbook-cloudflare-launch.md` → "Regla de oro")
+> antes de tocar DNS o el propio VPS.
+
 Runbook humano para el mismo camino que automatiza la skill
 `.claude/skills/disaster-deploy-vps/SKILL.md`. Si tienes un agente
 disponible, pídele que corra esa skill directamente — este documento es para

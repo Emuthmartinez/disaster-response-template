@@ -1,6 +1,6 @@
 ---
 name: disaster-configure
-description: Rellena config/deployment.config.json con la identidad de este despliegue (org, producto, desastre, región, mapa, idioma, contacto, dominios) y propaga esos valores a los consumidores estáticos que el loader de runtime no puede alcanzar (manifest.webmanifest, vars de dominio en .env, event-data.ts, emergency-contacts.ts). Úsalo primero, antes de disaster-brand, disaster-secrets-bootstrap o disaster-deploy-vps.
+description: Rellena config/deployment.config.json con la identidad de este despliegue (org, producto, desastre, región, mapa, idioma, contacto, dominios) tras un preflight de propiedad del dominio (NS/registrador contra la zona real), y propaga esos valores a los consumidores estáticos que el loader de runtime no puede alcanzar (manifest.webmanifest, vars de dominio en .env, wrangler.jsonc de los tres Workers si el fork usa Cloudflare, event-data.ts, emergency-contacts.ts). Úsalo primero, antes de disaster-brand, disaster-secrets-bootstrap y disaster-deploy-cloudflare/disaster-deploy-vps.
 ---
 
 # disaster-configure
@@ -59,16 +59,79 @@ emergencia falsos) — no publicable.
      skill). Si no te lo ha dado, pregúntale antes de escribir el archivo —
      no rellenes con números de ejemplo ni copies los de otro país al azar.
 
+3. **Si el fork va a usar el camino Cloudflare Workers**
+   (`disaster-deploy-cloudflare`, el camino primario de este template) —
+   `frontend/wrangler.jsonc`, `backend/wrangler.jsonc` y
+   `admin/wrangler.jsonc`, cada uno con un comentario `CHANGE_ME: nombre
+   real del Worker` en el `name` de nivel superior y en `env.staging.name`.
+   Elige un nombre de Worker por paquete, de-brandeado (p.ej.
+   `<slug-del-despliegue>-web`/`-api`/`-admin[-staging]`) — el camino VPS no
+   lee estos archivos en absoluto, así que sáltate este punto si el fork se
+   queda solo con `disaster-deploy-vps`. De paso, actualiza los `vars` que
+   estos archivos ya declaran con dominios de ejemplo
+   (`APP_BASE_URL`/`ADMIN_BASE_URL`/`CORS_ORIGINS` en `backend/wrangler.jsonc`,
+   `EMERGENCY_API_URL` en `admin/wrangler.jsonc`, y sus contrapartes de
+   `env.staging`) para que coincidan con `domains.*` — mismo principio que
+   el punto de `.env` de arriba, pero para wrangler.
+4. **`frontend/config/`, `lib/generated/brand-logo.ts`,
+   `public/llms.txt`** — copias/artefactos de build derivados de
+   `config/deployment.config.json`, generados por
+   `frontend/scripts/sync-deployment-config.mjs` /
+   `generate-brand-logo.mjs` / `generate-llms-txt.mjs` (los tres corren
+   juntos como `npm run codegen`, y el hook `predev`/`prebuild` ya los
+   dispara solo antes de `next dev`/`build`). No los edites a mano — si vas
+   a inspeccionarlos antes de levantar `next dev`, solo corre
+   `cd frontend && npm run codegen` para refrescarlos con la identidad
+   nueva. Sin esto, cualquier build que lea la copia local en
+   `frontend/config/` ve la identidad VIEJA hasta el primer
+   `dev`/`build`/`typecheck`.
+
+## Preflight de dominio (antes de fijarlo en el config)
+
+No escribas un dominio en `domains.web`/`domains.api`/`domains.admin` solo
+porque el deployer lo dijo — un despliegue real de este template llegó a
+producción con `deployment.config.json` apuntando a un `.app` que resultó
+estar registrado por otra persona, mientras el dominio realmente controlado
+(y ya zoneado en Cloudflare) era el `.co` — nadie lo notó hasta cruzar a mano
+fechas de WHOIS. Antes de escribir cualquier dominio en el config:
+
+```bash
+dig NS <dominio-propuesto> +short
+whois <dominio-propuesto> | grep -i "registrar\|creation date"
+```
+
+**Detente y pregunta al deployer si:**
+- Los NS no apuntan ya a la cuenta de Cloudflare que vas a usar (o el
+  deployer no puede confirmar que esa cuenta/ese registrador es suyo).
+- Hay variantes "lookalike" del mismo nombre en otros TLD o con pequeñas
+  variaciones registradas el mismo día — puede ser una coincidencia
+  inocente o un dominio de phishing oportunista sobre el mismo evento; si
+  existen, avísale al deployer aunque no bloquee este paso, es información
+  que necesita para comunicar cuál es el dominio real.
+- El dominio no lo controla el deployer en absoluto (dominio de otro
+  proyecto, typo, o un TLD que "sonaba bien" pero nadie registró todavía).
+
+Si algo de esto no cuadra, no adivines ni sigas adelante "por ahora" — el
+resto del standup (incluyendo `disaster-deploy-cloudflare`, que crea la
+zona/DNS reales sobre lo que escribas aquí) hereda este valor como fuente de
+verdad.
+
 ## Pasos
 
 1. Pide (o confirma que ya tienes) del deployer: nombre de la organización,
    nombre del producto/sitio, nombre del desastre/evento, tipo de desastre,
-   etiqueta de región, centro del mapa (lat/lng) y zoom inicial, idioma
-   (BCP-47), email de contacto, los tres dominios (web/api/admin), y la lista
-   de números de emergencia reales de la región.
+   etiqueta de región, centro del mapa (lat/lng) y zoom inicial, opcionalmente
+   un bounding box inicial `[south, west, north, east]` si quieres que el
+   mapa encuadre una región/impacto en vez de solo centrar+zoom (`mapBbox`,
+   ver abajo), idioma (BCP-47), email de contacto, los tres dominios
+   (web/api/admin — pasados por el preflight de arriba), y la lista de
+   números de emergencia reales de la región.
 2. Edita `config/deployment.config.json` con esos valores. No agregues keys
    fuera del set cerrado documentado arriba — `deployment-config.ts` rechaza
-   keys desconocidas y falla el build.
+   keys desconocidas y falla el build. `mapBbox` es una key OPCIONAL ya
+   soportada por el loader (`[south, west, north, east]`, cuatro números) —
+   agrégala solo si el deployer te dio (o puedes derivar) un encuadre real;
+   sin ella el mapa sigue funcionando con `mapCenter`/`mapZoom` como antes.
 3. Edita `frontend/public/manifest.webmanifest`: `name`, `short_name`,
    `description`, `lang`. Deja el resto (colores, iconos, shortcuts) intacto
    — eso es `disaster-brand`.
@@ -85,6 +148,11 @@ emergencia falsos) — no publicable.
    `ACME_EMAIL` para que coincidan con `domains` y `contactEmail` del config.
    Si no existe todavía, no lo crees — señala al deployer que corra
    `disaster-secrets-bootstrap` a continuación.
+7. Si el fork va por el camino Cloudflare Workers, edita los tres
+   `wrangler.jsonc` (punto 3 de "Qué toca" arriba) y corre
+   `cd frontend && npm run codegen` para refrescar la copia local del
+   config y los artefactos generados (punto 4). Si va por el camino VPS,
+   sáltate este paso.
 
 ## Verificación (obligatoria antes de dar por terminado)
 
@@ -134,4 +202,13 @@ No marques esto como terminado si:
 ## Siguiente paso
 
 Con la identidad y los datos reales en su sitio, continúa con
-`disaster-brand` (colores/logo) y luego `disaster-secrets-bootstrap`.
+`disaster-brand` (colores/logo) y luego `disaster-secrets-bootstrap`, y de
+ahí a `disaster-deploy-cloudflare` (camino primario) o `disaster-deploy-vps`
+(alternativa).
+
+Cuando el fork esté listo para hacerse público (repo visible, o compartido
+fuera de quien lo está preparando), recuerda que `disaster-content-audit`
+espera que el fork haya pasado de "modo template" a "modo despliegue"
+(`scripts/content-audit/mode`) — ese flip vive documentado en
+`disaster-content-audit`, no aquí; no lo hagas tú mismo como parte de este
+skill, solo ten presente que es un paso pendiente antes del audit final.

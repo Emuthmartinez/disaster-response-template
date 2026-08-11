@@ -2,10 +2,19 @@ import { describe, expect, it } from "vitest";
 import { MODELS, getModel } from "@/src/contexts/models/model-registry";
 
 describe("model-registry", () => {
-  it("expone los 7 modelos del backend public-api", () => {
+  it("expone los modelos administrables del backend public-api", () => {
     const paths = MODELS.map((m) => m.path).sort();
     expect(paths).toEqual(
-      ["chat", "contact", "donations", "hospitals", "missing", "patients", "reports"].sort(),
+      [
+        "chat",
+        "contact",
+        "deletion-requests",
+        "donations",
+        "hospitals",
+        "missing",
+        "patients",
+        "reports",
+      ].sort(),
     );
   });
 
@@ -38,6 +47,7 @@ function capabilityRoot(path: string): string {
     donations: "donation",
     chat: "chat",
     contact: "contact",
+    "deletion-requests": "deletion",
   };
   return map[path] ?? path;
 }

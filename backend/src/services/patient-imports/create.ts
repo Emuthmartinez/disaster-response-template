@@ -46,38 +46,42 @@ export async function createImport(
 	}
 
 	try {
-		await db.transaction(async (tx) => {
-			await tx.insert(patientImports).values({
-				id,
-				status: "pending",
-				source: (input.source ?? "api").slice(0, 120),
-				sourceRecordId: input.sourceRecordId?.trim()
-					? input.sourceRecordId.trim().slice(0, 200)
-					: null,
-				integration: input.integration?.trim()
-					? input.integration.trim().slice(0, 120)
-					: null,
-				contentType: (input.contentType ?? "application/json").slice(0, 120),
-				idempotencyKeyHash,
-				totalRows: input.rows.length,
-				createdBy: actorId,
-				createdAt: now,
-				updatedAt: now,
-			});
-
-			if (input.rows.length > 0) {
-				await tx.insert(patientImportRows).values(
-					input.rows.map((raw, i) => ({
-						id: randomUUID(),
-						importId: id,
-						rowIndex: i,
-						rawData: raw as Record<string, unknown>,
-						createdAt: now,
-						updatedAt: now,
-					})),
-				);
-			}
+		// SIN transacción interactiva (falla en el driver HTTP de Neon bajo
+		// Workers): header primero, filas después en tandas. Un corte entre los
+		// dos pasos deja un lote con menos filas que totalRows — el process lo
+		// detecta (guard de integridad) y lo marca fallido en vez de procesar a
+		// medias; reintentar con la misma Idempotency-Key devuelve el existente.
+		await db.insert(patientImports).values({
+			id,
+			status: "pending",
+			source: (input.source ?? "api").slice(0, 120),
+			sourceRecordId: input.sourceRecordId?.trim()
+				? input.sourceRecordId.trim().slice(0, 200)
+				: null,
+			integration: input.integration?.trim()
+				? input.integration.trim().slice(0, 120)
+				: null,
+			contentType: (input.contentType ?? "application/json").slice(0, 120),
+			idempotencyKeyHash,
+			totalRows: input.rows.length,
+			createdBy: actorId,
+			createdAt: now,
+			updatedAt: now,
 		});
+
+		const CHUNK = 100;
+		for (let start = 0; start < input.rows.length; start += CHUNK) {
+			await db.insert(patientImportRows).values(
+				input.rows.slice(start, start + CHUNK).map((raw, offset) => ({
+					id: randomUUID(),
+					importId: id,
+					rowIndex: start + offset,
+					rawData: raw as Record<string, unknown>,
+					createdAt: now,
+					updatedAt: now,
+				})),
+			);
+		}
 	} catch (err) {
 		if (!isUniqueViolation(err) || !idempotencyKeyHash || !actorId) throw err;
 		const existing = await db

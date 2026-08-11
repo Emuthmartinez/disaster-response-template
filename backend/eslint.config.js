@@ -2,10 +2,15 @@
  * ESLint flat-config del backend. Dos capas:
  *   1. Baseline: reglas recomendadas de JS + typescript-eslint (calidad general).
  *   2. Reglas de arquitectura LOCALES (eslint-rules/): convierten la guía de
- *      endpoints en restricciones ejecutables (capability/rate-limit/turnstile).
+ *      endpoints en restricciones ejecutables (capability/rate-limit/turnstile),
+ *      más una regla de driver DB (no-interactive-transactions) que aplica a
+ *      TODO backend/src/**, no solo a las rutas.
  *
- * Las reglas locales solo aplican a los archivos de rutas (routes/ + public-api/);
- * el resto del código solo recibe el baseline.
+ * Las reglas de endpoints solo aplican a los archivos de rutas (routes/ +
+ * public-api/ + modules/); no-interactive-transactions aplica a src/** entero
+ * (services/, auth/, lib/... cualquier sitio puede intentar una transacción
+ * interactiva) pero NO a backend/worker/** (corre bajo Node, fuera de src/,
+ * donde sí están permitidas). El resto del código solo recibe el baseline.
  */
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
@@ -54,6 +59,17 @@ export default tseslint.config(
       "local/require-capability-in-public-api": "error",
       "local/no-turnstile-in-public-api": "error",
       "local/user-facing-mutation-needs-guard": "error",
+    },
+  },
+  {
+    // no-interactive-transactions: TODO backend/src/**, no solo las rutas —
+    // services/, auth/, lib/, cualquier fichero puede llamar a db.transaction.
+    // backend/worker/** queda fuera de este glob a propósito (corre bajo Node,
+    // donde las transacciones interactivas sí funcionan); ver AGENTS.md.
+    files: ["src/**/*.ts"],
+    plugins: { local },
+    rules: {
+      "local/no-interactive-transactions": "error",
     },
   },
   {

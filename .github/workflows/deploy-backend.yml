@@ -1,0 +1,213 @@
+name: Deploy backend (manual)
+
+# Despliega SOLO la API (el Worker de backend/ — Express envuelto con
+# httpServerHandler, NO pasa por @opennextjs/cloudflare como frontend/admin).
+#
+# MANUAL A PROPÓSITO. No se dispara con push a main.
+#
+# El frontend se redespliega solo en cada push que lo toque; la API no,
+# porque sus despliegues no son equivalentes: comparte base de datos con lo
+# que ya está sirviendo, y una versión mala deja de aceptar escrituras
+# reales (p.ej. reportes). Que alguien tenga que pulsar el botón es la
+# funcionalidad, no una carencia.
+#
+# Lanzarlo:  Actions -> "Deploy backend (manual)" -> Run workflow
+#       o:   gh workflow run deploy-backend.yml -f confirmar=desplegar
+on:
+  workflow_dispatch:
+    inputs:
+      confirmar:
+        description: 'Escribe "desplegar" para confirmar'
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  deploy:
+    name: Deploy de la API
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Segunda red de seguridad: sin la palabra exacta, ni se ejecuta.
+    if: github.event.inputs.confirmar == 'desplegar'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # ADVERTENCIA — este workflow despliega backend/ EXACTAMENTE COMO ESTÁ
+      # en el ref sobre el que corre este run. NO es "lo último de main": es
+      # el ref elegido en el desplegable "Use workflow from" al lanzarlo.
+      #
+      # Si lo lanzas manualmente desde una rama de feature y luego alguien
+      # más lo relanza desde main, el segundo run SOBRESCRIBE EN SILENCIO el
+      # deploy del primero — no hay merge, no hay comparación de ref, es un
+      # deploy plano del código tal cual está en el ref de ese run. Confirma
+      # la rama en la pantalla de "Run workflow" antes de escribir
+      # "desplegar", y mira el ref/SHA de este paso en el log si algo sale
+      # distinto de lo esperado.
+      - name: "Advertencia: ref que se va a desplegar"
+        run: |
+          echo "::warning::Este run despliega backend/ tal como está en ${{ github.ref }} (commit ${{ github.sha }}) — NO necesariamente 'lo último de main'. Un run posterior lanzado desde otra rama sobrescribe este deploy sin avisar."
+          echo "Ref desplegado: ${{ github.ref }}"
+          echo "SHA desplegado: ${{ github.sha }}"
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Instalar Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      - name: Instalar dependencias
+        working-directory: backend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: backend
+        run: npm run typecheck
+
+      # Pre-flight: toda cola que backend/wrangler.jsonc declara (productores
+      # Y consumidores, incluidas las DLQ) tiene que EXISTIR ya en la cuenta
+      # de Cloudflare antes del deploy. `wrangler deploy` no crea colas por
+      # ti; si falta una, el Worker se despliega igual pero el binding queda
+      # roto en runtime (publicar en una cola inexistente falla al primer
+      # intento, no en build). Mejor pillarlo aquí, con el comando exacto
+      # para arreglarlo, que en el primer reporte de necesidad que no se
+      # publicó.
+      - name: "Pre-flight: colas declaradas vs colas existentes"
+        working-directory: backend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ ! -f wrangler.jsonc ]; then
+            echo "backend/wrangler.jsonc todavía no existe; nada que verificar."
+            exit 0
+          fi
+
+          # wrangler.jsonc admite comentarios // (JSONC) — jq necesita JSON
+          # puro. Best-effort: quita comentarios de línea completa o al
+          # final de línea. Si el fichero usa un estilo de comentario más
+          # raro, jq falla y este paso lo reporta como error legible en vez
+          # de fallar en silencio con un pre-flight que no comprobó nada.
+          declared="$(sed -E 's#^([[:space:]]*)//.*$##; s#([^:"])//.*$#\1#' wrangler.jsonc \
+            | jq -r '[(.queues.producers // [])[].queue, (.queues.consumers // [])[].queue] | unique | .[]')"
+
+          if [ -z "$declared" ]; then
+            echo "wrangler.jsonc no declara colas de nivel superior; nada que verificar."
+            exit 0
+          fi
+
+          echo "Colas declaradas en wrangler.jsonc:"
+          echo "$declared" | sed 's/^/  - /'
+
+          existing_raw="$(doppler run --command '
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ACCOUNT_API_TOKEN" \
+            CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+            npx wrangler queues list')"
+
+          missing=""
+          while IFS= read -r q; do
+            [ -z "$q" ] && continue
+            if ! printf '%s\n' "$existing_raw" | grep -qF "$q"; then
+              missing="${missing} ${q}"
+            fi
+          done < <(printf '%s\n' "$declared")
+
+          if [ -n "$missing" ]; then
+            echo "::error::Hay colas declaradas en wrangler.jsonc que NO existen todavía en Cloudflare. Créalas antes de desplegar:"
+            for q in $missing; do
+              echo "  npx wrangler queues create ${q}"
+            done
+            exit 1
+          fi
+          echo "Todas las colas declaradas ya existen en Cloudflare."
+
+      # OJO: las migraciones NO corren aquí. Son un paso aparte y deliberado
+      # (backend/worker/migrate.ts con DATABASE_URL apuntando a Neon
+      # DIRECTO, no al endpoint -pooler). Encadenarlas a cada deploy
+      # significaría migrar el esquema de producción sin que nadie lo mire.
+      #
+      # --env="" explícito: wrangler.jsonc declara un entorno con nombre
+      # (env.staging) además del de nivel superior; wrangler puede avisar (o
+      # dejar de inferir) cuál usar cuando hay entornos con nombre y no se
+      # pasa --env. Pasarlo vacío es la forma documentada de decir "el
+      # entorno de nivel superior, a propósito" sin dejarlo implícito.
+      #
+      # --message incrusta el SHA desplegado en los metadatos de la versión
+      # (queda visible vía `wrangler deployments list`); el paso siguiente
+      # lo usa para confirmar que la versión EN VIVO es esta.
+      - name: Deploy a Cloudflare Workers
+        working-directory: backend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          doppler run --command '
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ACCOUNT_API_TOKEN" \
+            CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+            npx wrangler deploy --env="" --message "sha:'"$GITHUB_SHA"'"'
+
+      # Confirma que la versión que quedó EN VIVO (no solo "subida") lleva
+      # el SHA de este run. Existe por el mismo motivo que el --env="" y el
+      # aviso sobre `routes` de arriba: `wrangler deploy` puede subir código
+      # y fallar al PROMOVERLO, dejando el Worker sirviendo la build
+      # anterior con un log que parece casi correcto.
+      - name: Comprobar que la versión EN VIVO es la desplegada
+        working-directory: backend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          deployments_json="$(doppler run --command '
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ACCOUNT_API_TOKEN" \
+            CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+            npx wrangler deployments list --json' 2>/dev/null)"
+
+          # Distintas versiones de wrangler han cambiado la forma exacta de
+          # este JSON. Nos quedamos con el despliegue MÁS RECIENTE (primer
+          # elemento, cualquiera que sea la ruta hasta él) y buscamos el SHA
+          # como texto DENTRO de ese bloque, sin asumir un nombre de campo
+          # exacto — así este check no se rompe con un cambio de esquema de
+          # wrangler, solo se vuelve menos preciso.
+          latest="$(printf '%s' "$deployments_json" | jq -c '(.[0] // .deployments[0]) // empty' 2>/dev/null)"
+
+          if [ -z "$latest" ]; then
+            echo "::warning::No se pudo interpretar la salida de 'wrangler deployments list --json'; comprobación de versión en vivo omitida (no bloqueante). Verifica a mano: npx wrangler deployments list"
+            exit 0
+          fi
+
+          if printf '%s' "$latest" | grep -qF "sha:${GITHUB_SHA}"; then
+            echo "Versión en vivo confirmada: coincide con sha:${GITHUB_SHA}"
+          else
+            echo "::error::El despliegue más reciente NO lleva el mensaje sha:${GITHUB_SHA}. El deploy pudo subir el código sin promoverlo — revisa manualmente con 'npx wrangler deployments list' antes de asumir que esto salió bien."
+            echo "Salida completa para depurar:"
+            printf '%s\n' "$deployments_json"
+            exit 1
+          fi
+
+      - name: Smoke check de la API
+        run: |
+          set -euo pipefail
+          API_DOMAIN="$(jq -r '.domains.api' config/deployment.config.json)"
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://${API_DOMAIN}/api/readyz" || echo 000)
+            echo "intento $i -> HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "::error::La API no devolvió 200 tras el despliegue"
+          exit 1

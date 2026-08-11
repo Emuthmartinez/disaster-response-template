@@ -49,6 +49,11 @@ function AuthedShell({ children }: { children: ReactNode }) {
             {can("patient:import") && (
               <NavLink href="/patient-imports" label="Importar pacientes" pathname={pathname} />
             )}
+            {/* Insumos hospitalarios: agregado restringido sobre el modelo
+                hospital — misma capacidad de lectura que /hospitals. */}
+            {can("hospital:read") && (
+              <NavLink href="/hospital-supplies" label="Insumos hospitalarios" pathname={pathname} />
+            )}
             {visible.length === 0 && (
               <li className="px-3 py-2 text-sm text-gray-500">Sin permisos de lectura.</li>
             )}

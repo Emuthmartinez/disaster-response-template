@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // CHANGE_ME: nombre real del Worker — ver skill disaster-configure.
+  "name": "ejemplo-emergencia-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  // Los dominios propios (apex + www, ver config/deployment.config.json →
+  // domains.web) se adjuntan por la API de CUENTA
+  // (/accounts/{id}/workers/domains).
+  //
+  // NO declararlos aquí con `routes`: con `routes`, wrangler llama además a
+  // /zones/{id}/workers/routes, para lo que un token de cuenta (sin permiso de
+  // zona) no tiene alcance. Ese fallo aborta el deploy DESPUÉS de subir el
+  // código pero ANTES de promover la versión — el Worker se queda sirviendo la
+  // build anterior y el comando de deploy parece casi correcto (verde en CI
+  // salvo por ese último paso). El síntoma en producción es un despliegue que
+  // "no hizo nada": el código nuevo nunca llegó a servir tráfico.
+  "observability": {
+    "enabled": true
+  },
+  // Entorno de staging: Worker aparte, dominio aparte, base de datos aparte
+  // (rama de tu proveedor Postgres).
+  //
+  // Comparte este mismo fichero a propósito — igual patrón que
+  // backend/wrangler.jsonc y admin/wrangler.jsonc: si staging y producción se
+  // configuran en sitios distintos, dejan de parecerse, y un entorno de
+  // pruebas que no se parece a producción no prueba nada.
+  "env": {
+    "staging": {
+      // CHANGE_ME: nombre real del Worker de staging — ver disaster-configure.
+      "name": "ejemplo-emergencia-web-staging",
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": ["nodejs_compat"],
+      "assets": {
+        "directory": ".open-next/assets",
+        "binding": "ASSETS"
+      },
+      "observability": {
+        "enabled": true
+      }
+    }
+  }
+}

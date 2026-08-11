@@ -1,0 +1,228 @@
+name: Deploy staging
+
+# Despliega el entorno de STAGING completo: backend, admin y frontend, los
+# tres con --env staging (bloque env.staging de cada wrangler.jsonc — Worker
+# aparte, dominio aparte, base de datos aparte).
+#
+# A DIFERENCIA DE PRODUCCIÓN, AQUÍ EL BACKEND TAMBIÉN SE DESPLIEGA SOLO. Es
+# justo el motivo de existir de staging: si probar un cambio de API exigiera
+# un paso manual, nadie lo probaría antes de tocar producción. En `main`
+# (deploy-backend.yml / deploy-admin.yml) el backend y el admin siguen
+# siendo manuales y con confirmación — ver ese workflow.
+#
+# Se despliegan SIEMPRE los tres tiers, sin filtro de rutas, para que
+# staging no quede con un frontend/admin nuevo hablando con una API vieja.
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  backend:
+    name: API de staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Instalar Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      - name: Instalar dependencias
+        working-directory: backend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: backend
+        run: npm run typecheck
+
+      # Mismo pre-flight que deploy-backend.yml, pero contra las colas del
+      # bloque env.staging (que NO hereda las de nivel superior). `wrangler
+      # deploy` no crea colas; si falta una, el binding queda roto en runtime
+      # (error 10013 al publicar), no en build. Día cero, este es el camino
+      # que se pisa primero — merece el mismo fallo accionable que prod.
+      - name: "Pre-flight: colas de staging declaradas vs existentes"
+        working-directory: backend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_STAGING }}
+        run: |
+          set -euo pipefail
+          if [ ! -f wrangler.jsonc ]; then
+            echo "backend/wrangler.jsonc todavía no existe; nada que verificar."
+            exit 0
+          fi
+          declared="$(sed -E 's#^([[:space:]]*)//.*$##; s#([^:"])//.*$#\1#' wrangler.jsonc \
+            | jq -r '[(.env.staging.queues.producers // [])[].queue, (.env.staging.queues.consumers // [])[].queue] | unique | .[]')"
+          if [ -z "$declared" ]; then
+            echo "env.staging no declara colas; nada que verificar."
+            exit 0
+          fi
+          existing_raw="$(doppler run --command '
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ACCOUNT_API_TOKEN" \
+            CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+            npx wrangler queues list')"
+          missing=""
+          while IFS= read -r q; do
+            [ -z "$q" ] && continue
+            if ! printf '%s\n' "$existing_raw" | grep -qF "$q"; then
+              missing="${missing} ${q}"
+            fi
+          done < <(printf '%s\n' "$declared")
+          if [ -n "$missing" ]; then
+            echo "::error::Hay colas de staging declaradas en wrangler.jsonc que NO existen en Cloudflare. Créalas antes de desplegar:"
+            for q in $missing; do
+              echo "  npx wrangler queues create ${q}"
+            done
+            exit 1
+          fi
+          echo "Todas las colas de staging declaradas ya existen en Cloudflare."
+
+      # DOPPLER_TOKEN_STAGING apunta al config de staging de Doppler, cuyo
+      # DATABASE_URL es la base/rama de staging — nunca la de producción.
+      - name: Deploy
+        working-directory: backend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_STAGING }}
+        run: |
+          doppler run --command '
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ACCOUNT_API_TOKEN" \
+            CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+            npx wrangler deploy --env staging'
+
+  admin:
+    name: Admin de staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Detrás del backend por el mismo motivo que el frontend: que el panel
+    # nuevo hable con la API nueva, no con la versión anterior.
+    needs: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+
+      - name: Instalar Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      - name: Instalar dependencias
+        working-directory: admin
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: admin
+        run: npm run typecheck
+
+      - name: Build (OpenNext -> Workers)
+        working-directory: admin
+        run: npx opennextjs-cloudflare build
+
+      - name: Deploy
+        working-directory: admin
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_STAGING }}
+        run: |
+          doppler run --command '
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ACCOUNT_API_TOKEN" \
+            CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+            npx wrangler deploy --env staging --old-asset-ttl 86400'
+
+      - name: Smoke check
+        run: |
+          set -euo pipefail
+          ADMIN_DOMAIN="admin-staging.$(jq -r '.domains.admin' config/deployment.config.json | sed -E 's/^admin\.//')"
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://${ADMIN_DOMAIN}/api/health" || echo 000)
+            echo "intento $i -> HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "::error::El panel de staging no devolvió 200"
+          exit 1
+
+  frontend:
+    name: Frontend de staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Detrás del backend: el frontend se construye con NEXT_PUBLIC_API_URL
+    # apuntando a la API de staging, así que conviene que esa API ya sea la
+    # nueva cuando el frontend salga.
+    needs: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      - name: Instalar dependencias
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build (OpenNext -> Workers)
+        working-directory: frontend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_STAGING }}
+          APP_BUILD_SHA: ${{ github.sha }}
+        run: doppler run -- npx opennextjs-cloudflare build
+
+      - name: Deploy
+        working-directory: frontend
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_STAGING }}
+        run: |
+          doppler run --command '
+            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ACCOUNT_API_TOKEN" \
+            CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+            npx wrangler deploy --env staging --old-asset-ttl 86400'
+
+      - name: Smoke check
+        run: |
+          set -euo pipefail
+          WEB_DOMAIN="staging.$(jq -r '.domains.web' config/deployment.config.json)"
+          API_DOMAIN="$(jq -r '.domains.api' config/deployment.config.json | sed -E 's/^api\./api-staging./')"
+          for i in $(seq 1 10); do
+            web=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://${WEB_DOMAIN}/" || echo 000)
+            api=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://${API_DOMAIN}/api/readyz" || echo 000)
+            echo "intento $i -> web:$web api:$api"
+            [ "$web" = "200" ] && [ "$api" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "::error::Staging no respondió 200 en web y api"
+          exit 1

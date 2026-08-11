@@ -9,12 +9,23 @@ vendor/compliance, no como un checkbox gratis.
 
 Los cuatro módulos actuales:
 
-| Flag | Qué hace | Vendor/superficie |
-|---|---|---|
-| `ENABLE_RESPONSEGRID` | Directorio de centros de acopio + publicar necesidades de insumos | API pública de terceros (ResponseGrid) |
-| `ENABLE_HUB_FEDERATION` | Sincroniza reportes con despliegues hermanos del mismo template + réplica SQL pública opcional | Tu propia infraestructura hermana, o un consumidor de datos externo |
-| `ENABLE_PATIENT_OCR` | Extrae registros de pacientes desde fotos/PDF de listas de hospital vía un proveedor de visión (VL) | API de terceros que recibe imágenes con PII/datos de salud |
-| `ENABLE_EXAMPLE_SOURCE` | Fuente de sincronización de ejemplo (fixture sintético, sin red) — el patrón para tu fuente real | Ninguno (fixture en el propio repo) |
+| Flag | Qué hace | Vendor/superficie | Dónde corre su trabajo de fondo |
+|---|---|---|---|
+| `ENABLE_RESPONSEGRID` | Directorio de centros de acopio + publicar necesidades de insumos | API pública de terceros (ResponseGrid) | La lectura es request-path (ambos caminos); la publicación pasa por el seam de jobs — Cloudflare Queues (Camino A) o BullMQ (Camino B), ver AGENTS.md → "Jobs de fondo" |
+| `ENABLE_HUB_FEDERATION` | Sincroniza reportes con despliegues hermanos del mismo template + réplica SQL pública opcional | Tu propia infraestructura hermana, o un consumidor de datos externo | `backend/worker/hub/` — **solo Camino B**; no está portado al seam de Cloudflare Queues/Cron todavía |
+| `ENABLE_PATIENT_OCR` | Extrae registros de pacientes desde fotos/PDF de listas de hospital vía un proveedor de visión (VL) | API de terceros que recibe imágenes con PII/datos de salud | Aplicación vía el seam de jobs (ver "Jobs de fondo" en AGENTS.md) — funciona en ambos caminos si el seam correspondiente está desplegado |
+| `ENABLE_EXAMPLE_SOURCE` | Fuente de sincronización de ejemplo (fixture sintético, sin red) — el patrón para tu fuente real | Ninguno (fixture en el propio repo) | `backend/worker/sync/` — **solo Camino B** tal como está; portar tu fuente real al seam de Cloudflare es trabajo tuyo si eliges el Camino A |
+
+**Antes de asumir que un módulo activado está corriendo de verdad en tu
+despliegue, confirma en qué camino corre su pieza de fondo (columna de
+arriba) contra el camino que de verdad usa tu fork** (ver `CLAUDE.md` → "Dos
+caminos de despliegue"). Un flag `ENABLE_*` en `true` en Doppler/`.env` no
+implica que el trabajo de fondo que depende de él esté corriendo — si el
+Camino A no tiene ese job portado al seam de Cloudflare, el flag queda
+encendido pero inerte, sin ningún error visible. Esta tabla es la que hay
+que mantener actualizada cuando se porta un módulo nuevo, precisamente para
+que no vuelva a pasar lo que ya pasó una vez: un doc describiendo un módulo
+como "activo" cuando el runtime real no tenía nada corriéndolo.
 
 ---
 
@@ -35,7 +46,11 @@ rate-limit) + `GET /api/needs/status/{jobId}` (poll del resultado).
 
 - `RESPONSEGRID_API_URL` — URL base de la API pública de ResponseGrid.
 - `RESPONSEGRID_EMERGENCY_SLUG` — identificador de tu emergencia/instancia en
-  ResponseGrid.
+  ResponseGrid. **Pre-requisito de día cero:** ResponseGrid (el tercero) tiene
+  que crear el registro de esa emergencia en SU lado antes de que el slug
+  funcione — pídelo por su canal de onboarding antes de encender el flag. Un
+  slug no registrado hace que `/api/acopio` y `/api/needs` devuelvan 404 en
+  bloque, lo que se confunde fácilmente con un bug del propio despliegue.
 - `RESPONSEGRID_API_KEY` — solo si vas a **publicar** necesidades (no hace
   falta para solo leer el directorio). Sin ella, `POST /api/needs` responde
   `503` en vez de fallar de forma confusa.

@@ -85,6 +85,27 @@ tenga que construir desde cero:
   cualquier coincidencia. Está pensado para correr en CI en cada PR de tu
   fork, no solo una vez al extraer la plantilla.
 
+### Si un control de arriba queda desactivado en tu despliegue
+
+Puede pasar por una razón operativa real: un incidente, una integración que
+todavía no terminaste de cablear, una migración a mitad de camino. Cuando
+eso ocurra en tu fork, **no lo apagues en silencio** — agrega un callout
+fechado justo debajo del control afectado, en tu propia copia de este
+documento (o donde documentes el estado real de tu despliegue), con esta
+forma:
+
+> **Estado (YYYY-MM-DD):** desactivado. Por qué: <causa concreta>.
+> Mitigación mientras tanto: <qué sigue protegiendo, si algo>. Orden exacto
+> de reactivación: <pasos, en el orden que importa>.
+
+Esto no es burocracia — es la diferencia entre "alguien lo apagó a
+propósito, temporalmente, y sabemos cómo volver a encenderlo" y "un doc
+afirma que este control está activo cuando en realidad no lo está", que es
+exactamente el tipo de brecha silenciosa que este documento existe para
+prevenir. Un control que quedó "temporalmente" apagado sin ese callout
+tiende a quedarse apagado indefinidamente, porque nadie que llega después
+tiene forma de saber que hace falta revisarlo.
+
 ## Deployers: van a recopilar PII de personas en crisis
 
 Esto no es opcional ni un detalle secundario: el propósito mismo de este

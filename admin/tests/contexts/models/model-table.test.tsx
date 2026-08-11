@@ -9,6 +9,41 @@ import { AdminSessionContext } from "@/src/shared/auth/admin-session-context";
 
 const reports = getModel("reports")!;
 
+describe("ModelTable — selector de hospital (select-model)", () => {
+  it("el form de pacientes ofrece hospitales por nombre, no UUIDs", async () => {
+    server.use(
+      http.get("/api/models/patients", () => HttpResponse.json([])),
+      http.get("/api/models/hospitals", () =>
+        HttpResponse.json([
+          { id: "h-1", name: "Hospital Demo Uno" },
+          { id: "h-2", name: "Hospital Demo Dos" },
+        ]),
+      ),
+    );
+    const patients = getModel("patients")!;
+    const capabilities = ["patient:read", "patient:create"];
+    renderWithProviders(
+      <AdminSessionContext.Provider
+        value={{
+          user: { id: "u", email: "demo@example.test", roleId: null, orgId: null, isAdmin: false },
+          capabilities,
+          isLoading: false,
+          login: vi.fn(),
+          logout: vi.fn(),
+          can: (capability) => capabilities.includes(capability),
+        }}
+      >
+        <ModelTable model={patients} />
+      </AdminSessionContext.Provider>,
+    );
+
+    const select = await screen.findByLabelText("Hospital");
+    expect(select.tagName).toBe("SELECT");
+    expect(await screen.findByRole("option", { name: "Hospital Demo Uno" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Hospital Demo Dos" })).toBeInTheDocument();
+  });
+});
+
 describe("ModelTable operations", () => {
   it("solo muestra acciones concedidas por capacidad", async () => {
     server.use(

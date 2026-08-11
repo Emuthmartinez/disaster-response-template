@@ -15,6 +15,7 @@ import { authRouter } from "@/routes/auth";
 import { patientImportsRouter } from "@/public-api/patient-imports";
 import { reportsResource } from "@/public-api/resources/reports.resource";
 import { missingResource } from "@/public-api/resources/missing.resource";
+import { petsResource } from "@/public-api/resources/pets.resource";
 import { hospitalsResource } from "@/public-api/resources/hospitals.resource";
 import { patientsResource } from "@/public-api/resources/patients.resource";
 import { donationsResource } from "@/public-api/resources/donations.resource";
@@ -28,6 +29,8 @@ import { auditRouter } from "@/public-api/routers/audit.router";
 import { capabilitiesRouter } from "@/public-api/routers/capabilities.router";
 import { apiKeysRouter } from "@/public-api/routers/api-keys.router";
 import { hubCredentialsRouter } from "@/public-api/routers/hub-credentials.router";
+import { deletionRequestsRouter } from "@/public-api/routers/deletion-requests.router";
+import { hospitalSuppliesRouter } from "@/public-api/routers/hospital-supplies.router";
 
 /**
  * Registro path → CONFIG del recurso. Fuente de verdad ÚNICA: de aquí salen
@@ -40,6 +43,7 @@ type AnyResource = CrudResource<unknown, unknown, unknown, unknown>;
 export const PUBLIC_RESOURCES: Record<string, AnyResource> = {
   reports: reportsResource as AnyResource,
   missing: missingResource as AnyResource,
+  pets: petsResource as AnyResource,
   hospitals: hospitalsResource as AnyResource,
   patients: patientsResource as AnyResource,
   donations: donationsResource as AnyResource,
@@ -67,4 +71,10 @@ export function mountPublicApi(app: Express): void {
   app.use("/api/public/capabilities", capabilitiesRouter); // role:read (catálogo p/ UI)
   app.use("/api/public/api-keys", apiKeysRouter); // apikey:manage (self-service)
   app.use("/api/public/hub-credentials", hubCredentialsRouter); // mirror:manage (super admin)
+  app.use("/api/public/deletion-requests", deletionRequestsRouter); // deletion:read/edit
+  // Reutiliza hospital:read/hospital:edit a propósito — ver comentario de
+  // cabecera del router: el seed de capacidades corre solo en el job de
+  // migración (humano-gateado), así que una capability nueva se queda sin
+  // sembrar hasta que alguien corre ese job a mano.
+  app.use("/api/public/hospital-supplies", hospitalSuppliesRouter);
 }

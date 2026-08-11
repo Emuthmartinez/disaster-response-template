@@ -16,6 +16,8 @@ const BUILD_DATE = new Date();
 const STATIC_PATHS = [
   { path: "/", changeFrequency: "hourly" as const, priority: 1 },
   { path: "/hospitales", changeFrequency: "hourly" as const, priority: 0.9 },
+  // Contenido ciudadano que cambia a diario mientras dure la emergencia.
+  { path: "/mascotas", changeFrequency: "hourly" as const, priority: 0.8 },
   { path: "/telefonos", changeFrequency: "weekly" as const, priority: 0.8 },
   { path: "/guia", changeFrequency: "weekly" as const, priority: 0.8 },
   { path: "/acopio", changeFrequency: "daily" as const, priority: 0.7 },

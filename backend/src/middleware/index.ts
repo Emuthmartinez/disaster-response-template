@@ -29,6 +29,29 @@ export function asyncHandler(
   return (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 }
 
+/**
+ * Cabeceras para servir una FOTO pública (bytes de imagen inmutables).
+ *
+ * ACAO fijo en `*` en vez del reflejo por-Origin del middleware cors():
+ * estas respuestas se cachean en el borde de Cloudflare, que IGNORA `Vary`.
+ * Con el reflejo, la copia cacheada llevaría el ACAO (o la ausencia de ACAO)
+ * de quien pidió primero, y el fetch en modo CORS del service worker fallaría
+ * al azar según qué copia tocó. Una imagen pública sin credenciales es el caso
+ * exacto para el comodín; se retira Allow-Credentials porque `*` + credenciales
+ * es una combinación inválida para el navegador (y nadie pide fotos con
+ * cookies: los <img> y el SW van sin credenciales).
+ */
+export function setPublicPhotoHeaders(res: Response, contentType: string): void {
+  res.setHeader("Content-Type", contentType);
+  res.setHeader(
+    "Cache-Control",
+    "public, max-age=31536000, s-maxage=31536000, immutable",
+  );
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.removeHeader("Access-Control-Allow-Credentials");
+  res.removeHeader("Vary");
+}
+
 /** Rate-limit por IP (cf-connecting-ip) + scope. Valkey-backed, fail-open. */
 export function rateLimit(opts: { scope: string; limit: number; windowMs?: number }): RequestHandler {
   return (req, _res, next) => {

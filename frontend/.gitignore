@@ -1,0 +1,21 @@
+# Artefactos de build del adaptador de Cloudflare Workers
+.open-next/
+.wrangler/
+
+# Copia de build de config/deployment.config.json
+# (la genera scripts/sync-deployment-config.mjs desde la raiz del repo)
+config/
+
+# Modulos generados en prebuild desde assets de marca
+# (los genera scripts/generate-brand-logo.mjs)
+lib/generated/
+
+# llms.txt generado desde config/deployment.config.json
+# (lo genera scripts/generate-llms-txt.mjs — nunca a mano)
+public/llms.txt
+
+# Next.js regenera este archivo en cada `next dev`/`next build`; no aporta
+# nada versionado y diverge por máquina.
+next-env.d.ts
+
+*.tsbuildinfo

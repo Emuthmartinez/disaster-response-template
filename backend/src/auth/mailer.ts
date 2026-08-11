@@ -20,9 +20,13 @@ function transport(): nodemailer.Transporter | null {
   return _transport;
 }
 
-/** Construye el link de aceptación de invitación (frontend). */
+/**
+ * Construye el link de aceptación de invitación. La página /invite/<token>
+ * vive en el PANEL ADMIN (admin/app/invite/[token]), no en el sitio público:
+ * sin ADMIN_BASE_URL configurada, el link emailado apuntaría a un 404.
+ */
 export function inviteUrl(token: string): string {
-  const base = env.APP_BASE_URL.replace(/\/$/, "");
+  const base = (env.ADMIN_BASE_URL || env.APP_BASE_URL).replace(/\/$/, "");
   return `${base}/invite/${token}`;
 }
 

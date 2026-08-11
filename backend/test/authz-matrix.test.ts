@@ -66,6 +66,48 @@ const CASES: Case[] = [
   { label: "patient-import detail", method: "get", path: "/api/public/patient-imports/none", cap: "patient:import" },
   { label: "patient-import rows", method: "get", path: "/api/public/patient-imports/none/rows", cap: "patient:import" },
   { label: "patient-import apply", method: "post", path: "/api/public/patient-imports/none/apply", cap: "patient:import" },
+  // --- Solicitudes de eliminación de datos (router a mano; deletion:read/edit) ---
+  // GDPR/CCPA/Ley 1581-de-Colombia/etc, según la jurisdicción del despliegue.
+  { label: "deletion-requests list", method: "get", path: "/api/public/deletion-requests", cap: "deletion:read" },
+  {
+    label: "deletion-requests edit",
+    method: "patch",
+    path: "/api/public/deletion-requests/none",
+    cap: "deletion:edit",
+    body: { status: "resolved" },
+  },
+  // --- Insumos hospitalarios (router a mano; reutiliza capacidades hospital:*) ---
+  { label: "hospital-supplies board", method: "get", path: "/api/public/hospital-supplies", cap: "hospital:read" },
+  { label: "hospital-supplies snapshot", method: "get", path: "/api/public/hospital-supplies/none", cap: "hospital:read" },
+  { label: "hospital-supplies events", method: "get", path: "/api/public/hospital-supplies/none/events", cap: "hospital:read" },
+  {
+    label: "hospital-supplies status write",
+    method: "post",
+    path: "/api/public/hospital-supplies/none/status",
+    cap: "hospital:edit",
+    body: { category: "medications", status: "red" },
+  },
+  {
+    label: "hospital-supplies need create",
+    method: "post",
+    path: "/api/public/hospital-supplies/none/needs",
+    cap: "hospital:edit",
+    body: { category: "medications", itemType: "Insumo demo", urgency: "yellow" },
+  },
+  {
+    label: "hospital-supplies need edit",
+    method: "patch",
+    path: "/api/public/hospital-supplies/none/needs/none",
+    cap: "hospital:edit",
+    body: { status: "covered" },
+  },
+  {
+    label: "hospital-supplies help edit",
+    method: "patch",
+    path: "/api/public/hospital-supplies/none/help/none",
+    cap: "hospital:edit",
+    body: { status: "resolved" },
+  },
   // --- RBAC admin (roles vía fábrica; users/grants/audit a mano) ---
   { label: "roles list", method: "get", path: "/api/public/roles", cap: "role:read" },
   {

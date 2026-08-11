@@ -209,6 +209,19 @@ export async function processImport(
 		.where(eq(patientImportRows.importId, importId))
 		.orderBy(asc(patientImportRows.rowIndex))) as RawStagingRow[];
 
+	// Guard de integridad: la creación/ingesta escribe header y filas SIN
+	// transacción (Workers); si un corte dejó menos filas que totalRows, esto
+	// NO se procesa a medias — se marca fallido con causa clara y se reintenta
+	// recreando el lote (o re-ingiriendo el archivo).
+	if (ocrHeader && rawRows.length !== ocrHeader.totalRows) {
+		const summary = `El staging tiene ${rawRows.length} filas pero el lote declara ${ocrHeader.totalRows}: la carga quedó incompleta. Vuelve a crear el lote (o re-ingiere el archivo).`;
+		const { markImportFailed } = await import("./create");
+		await markImportFailed(importId, summary, "process");
+		const failed = await getImport(importId);
+		if (!failed) throw new Error(`patient_import ${importId} no existe`);
+		return failed;
+	}
+
 	const candidateCache = new Map<string, Map<string, DedupCandidate[]>>();
 	const documentHashCache = new Map<string, DedupCandidate[]>();
 

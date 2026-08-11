@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { env } from "@/config/env";
 import { getDb, schema } from "@/db";
 import type { DedupCandidate } from "@/services/patient-import-logic";
@@ -100,40 +100,13 @@ export interface QueryRows<T> {
 	rows: T[];
 }
 
-export async function lockHeaderForUpdate(
-	tx: Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0],
-	importId: string,
-): Promise<ImportHeaderRow | null> {
-	const result = (await tx.execute(sql`
-    select
-      id,
-      status,
-      source,
-      source_record_id as "sourceRecordId",
-      integration,
-      content_type as "contentType",
-      job_id as "jobId",
-      failed_stage as "failedStage",
-      idempotency_key_hash as "idempotencyKeyHash",
-      total_rows as "totalRows",
-      valid_rows as "validRows",
-      invalid_rows as "invalidRows",
-      duplicate_rows as "duplicateRows",
-      review_rows as "reviewRows",
-      applied_rows as "appliedRows",
-      created_by as "createdBy",
-      error_summary as "errorSummary",
-      created_at as "createdAt",
-      processed_at as "processedAt",
-      applied_at as "appliedAt",
-      updated_at as "updatedAt"
-    from patient_imports
-    where id = ${importId}
-    for update
-  `)) as unknown as QueryRows<ImportHeaderRow>;
-	return result.rows[0] ?? null;
-}
-
+/**
+ * Transición de estado del lote como UPDATE CONDICIONAL de una sola sentencia
+ * (reemplaza al SELECT … FOR UPDATE + transacción interactiva, que falla en el
+ * driver HTTP de Neon bajo Workers). El WHERE es el guard: solo transiciona si
+ * el estado actual está en `allowed`. Si no actualizó nada, se recarga el
+ * header para producir el MISMO error que antes (no existe / estado inválido).
+ */
 export async function transitionImportStatus(
 	importId: string,
 	allowed: readonly ImportStatus[],
@@ -141,17 +114,23 @@ export async function transitionImportStatus(
 	action: string,
 ): Promise<boolean> {
 	const db = getDb();
-	return db.transaction(async (tx) => {
-		const header = await lockHeaderForUpdate(tx, importId);
-		if (!header) throw new Error(`patient_import ${importId} no existe`);
-		if (header.status === nextStatus) return true;
-		assertImportState(header, allowed, action);
-		await tx
-			.update(patientImports)
-			.set({ status: nextStatus, failedStage: null, updatedAt: Date.now() })
-			.where(eq(patientImports.id, importId));
-		return true;
-	});
+	const updated = await db
+		.update(patientImports)
+		.set({ status: nextStatus, failedStage: null, updatedAt: Date.now() })
+		.where(
+			and(
+				eq(patientImports.id, importId),
+				inArray(patientImports.status, [...allowed, nextStatus]),
+			),
+		)
+		.returning({ id: patientImports.id });
+	if (updated[0]) return true;
+
+	const header = await loadHeader(importId);
+	if (!header) throw new Error(`patient_import ${importId} no existe`);
+	if (header.status === nextStatus) return true;
+	assertImportState(header, allowed, action);
+	return true;
 }
 
 export interface StagingRow {

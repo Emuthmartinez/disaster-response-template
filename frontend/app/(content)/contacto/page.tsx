@@ -3,16 +3,29 @@ import { pageMetadata } from "@/lib/metadata";
 import ContactForm from "@/components/features/contacts/ContactForm";
 import SubPageShell from "@/components/layout/SubPageShell";
 import { CONTACT_EMAIL, contactMailto } from "@/lib/site";
+import { contactPageSchema } from "@/lib/jsonld";
+
+const CONTACT_DESC = `Escríbenos en ${CONTACT_EMAIL} o usa el formulario de contacto. Iniciativa ciudadana, independiente y no gubernamental.`;
 
 export const metadata: Metadata = pageMetadata({
   title: "Contacto",
-  description: `Escríbenos en ${CONTACT_EMAIL} o usa el formulario de contacto. Iniciativa ciudadana, independiente y no gubernamental.`,
+  description: CONTACT_DESC,
   path: "/contacto",
 });
 
 export default function ContactoPage() {
   return (
-    <SubPageShell breadcrumb="Contacto">
+    <SubPageShell
+      breadcrumb="Contacto"
+      path="/contacto"
+      extraSchema={[
+        contactPageSchema({
+          path: "/contacto",
+          name: "Contacto",
+          description: CONTACT_DESC,
+        }),
+      ]}
+    >
       <section className="mx-auto w-full max-w-xl px-4 py-10 sm:px-6">
         <h1 className="qi-h1">Contacto</h1>
         <p className="mt-2 text-sm leading-relaxed text-[var(--etext2)]">

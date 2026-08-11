@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { trackEvent } from "@/lib/openpanel";
 import { useTurnstile } from "@/hooks/useTurnstile";
 import { usePhotoUpload } from "@/hooks/usePhotoUpload";
+import { usePrivacyConsent } from "@/components/layout/PrivacyConsentGate";
 
 export interface MissingFoundPayload {
   note: string;
@@ -22,6 +23,7 @@ export default function MissingFoundForm({
   onCancel,
   onSubmit,
 }: Props) {
+  const { ensureConsent } = usePrivacyConsent();
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +35,10 @@ export default function MissingFoundForm({
   const handleSubmit = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault();
+
+      // Consentimiento ANTES de enviar datos personales. Si la persona no acepta,
+      // no se envia nada. Ver components/layout/PrivacyConsentGate.tsx.
+      if (!(await ensureConsent())) return;
       setError(null);
       if (!note.trim()) {
         setError(
@@ -57,7 +63,7 @@ export default function MissingFoundForm({
         setSubmitting(false);
       }
     },
-    [note, photo, onSubmit, turnstileGetToken],
+    [note, photo, onSubmit, turnstileGetToken, ensureConsent],
   );
 
   useEffect(() => {

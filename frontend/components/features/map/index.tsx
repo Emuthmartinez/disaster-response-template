@@ -5,6 +5,7 @@ import { useCallback, useMemo, useRef } from "react";
 import { MapContainer, Marker, TileLayer, ZoomControl } from "react-leaflet";
 import { useClientMount } from "@/hooks/useClientMount";
 import { MissingClusterLayer } from "./ClusterLayer";
+import { PetClusterLayer } from "./PetClusterLayer";
 import {
 	BoundsHandler,
 	ClickHandler,
@@ -15,15 +16,20 @@ import {
 } from "./handlers";
 import { draftIcon as makeDraftIcon } from "./icons";
 import { ReportMarker } from "./ReportMarker";
+import { EarthquakeLayer } from "./EarthquakeLayer";
 import type { MapViewProps } from "./types";
 import WeatherLayer from "./WeatherLayer";
+import { MapLoading } from "@/components/ui/SectionLoading";
 
 export type { MapBounds, MapViewProps } from "./types";
 
 function MapViewInner({
 	reports,
 	missingMarkers = [],
+	petMarkers = [],
+	earthquakes = [],
 	showMissingOnMap = true,
+	showPetsOnMap = true,
 	onBoundsChange,
 	draft,
 	onPick,
@@ -34,6 +40,7 @@ function MapViewInner({
 	focus,
 	center,
 	zoom,
+	initialBounds,
 	fitRequest = null,
 	showRain = false,
 	showClouds = false,
@@ -47,6 +54,10 @@ function MapViewInner({
 		<MapContainer
 			center={center}
 			zoom={zoom}
+			// bounds (si viene de mapBbox) manda sobre center/zoom SOLO en el
+			// encuadre inicial — Leaflet hace fitBounds una vez al montar y a
+			// partir de ahí el usuario controla el zoom/pan libremente.
+			bounds={initialBounds}
 			scrollWheelZoom
 			zoomControl={false}
 			className="h-full w-full"
@@ -64,11 +75,16 @@ function MapViewInner({
 			{(showRain || showClouds) && (
 				<WeatherLayer showRain={showRain} showClouds={showClouds} />
 			)}
+			<EarthquakeLayer earthquakes={earthquakes} />
 			<BoundsHandler onBoundsChange={onBoundsChange} />
 			<ClickHandler onPick={onPick} />
 
 			{showMissingOnMap && (
 				<MissingClusterLayer markers={missingMarkers} markerRefs={markerRefs} />
+			)}
+
+			{showPetsOnMap && petMarkers.length > 0 && (
+				<PetClusterLayer markers={petMarkers} markerRefs={markerRefs} />
 			)}
 
 			{reports.map((report) => (
@@ -94,12 +110,7 @@ export default function MapView(props: MapViewProps) {
 
 	if (!mounted) {
 		return (
-			<div
-				className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500"
-				aria-hidden
-			>
-				Cargando mapa…
-			</div>
+			<MapLoading />
 		);
 	}
 

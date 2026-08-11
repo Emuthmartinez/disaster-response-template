@@ -153,6 +153,61 @@ export function ModelTable({ model }: { model: ModelConfig }) {
   );
 }
 
+/**
+ * <select> poblado con las filas de otro modelo del registro. Componente
+ * propio para poder usar el hook de lista por instancia (uno por campo).
+ * El value que viaja al backend es el `id`; la persona ve el nombre.
+ */
+function SelectModelField({
+  field,
+  value,
+  onChange,
+}: {
+  field: ModelField;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const { data, isLoading, isError } = useModelList(field.optionsModel ?? "");
+  const labelKey = field.optionLabelKey ?? "name";
+
+  // Si las opciones no cargan (p.ej. un rol con patient:create pero sin
+  // hospital:read), degradar a entrada manual del ID: peor UX, pero el flujo
+  // no queda BLOQUEADO. El backend valida el ID igual.
+  if (isError) {
+    return (
+      <Input
+        label={`${field.label} (ID — no se pudieron cargar las opciones)`}
+        required={field.required}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }
+
+  // NUNCA disabled: un control deshabilitado queda FUERA de la validación
+  // required de HTML5 y el submit pasaría con el campo vacío mientras carga.
+  return (
+    <label className="text-sm">
+      <span className="mb-1 block font-medium">{field.label}</span>
+      <select
+        className="w-full rounded border px-3 py-2"
+        required={field.required}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">
+          {isLoading ? "Cargando opciones…" : `— Elige ${field.label.toLowerCase()} —`}
+        </option>
+        {(data ?? []).map((row) => (
+          <option key={renderCell(row.id)} value={renderCell(row.id)}>
+            {renderCell(row[labelKey])}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function ModelForm({
   fields,
   initial = {},
@@ -184,18 +239,29 @@ function ModelForm({
 
   return (
     <form onSubmit={submit} className="grid gap-3 rounded border bg-gray-50 p-3 sm:grid-cols-2">
-      {fields.map((field) => (
-        <Input
-          key={field.key}
-          label={field.label}
-          type={field.type ?? "text"}
-          required={field.required}
-          value={renderCell(values[field.key]).replace("—", "")}
-          onChange={(event) =>
-            setValues((current) => ({ ...current, [field.key]: event.target.value }))
-          }
-        />
-      ))}
+      {fields.map((field) =>
+        field.type === "select-model" ? (
+          <SelectModelField
+            key={field.key}
+            field={field}
+            value={renderCell(values[field.key]).replace("—", "")}
+            onChange={(next) =>
+              setValues((current) => ({ ...current, [field.key]: next }))
+            }
+          />
+        ) : (
+          <Input
+            key={field.key}
+            label={field.label}
+            type={field.type ?? "text"}
+            required={field.required}
+            value={renderCell(values[field.key]).replace("—", "")}
+            onChange={(event) =>
+              setValues((current) => ({ ...current, [field.key]: event.target.value }))
+            }
+          />
+        ),
+      )}
       <div className="flex items-end gap-2">
         <Button type="submit" disabled={pending}>
           {pending ? "Guardando…" : submitLabel}

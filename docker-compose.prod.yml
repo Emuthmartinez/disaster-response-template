@@ -126,8 +126,11 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      # Raíz del repo: ver el comentario equivalente en docker-compose.yml —
+      # el build necesita leer config/deployment.config.json, que vive fuera
+      # de frontend/.
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
         NEXT_PUBLIC_R2_PUBLIC_BASE: ${NEXT_PUBLIC_R2_PUBLIC_BASE}

@@ -7,7 +7,7 @@ import { HandCoins, MapPinned } from "lucide-react";
 import TranslateWidget from "@/components/ui/TranslateWidget";
 import { SiteBrand } from "./HeroSection";
 import { toggleTheme } from "./ThemeProvider";
-import { useMissingStats } from "@/hooks/useMissingStats";
+import { useMissingStats } from "@/hooks/missing";
 import { SITE_PRODUCT_NAME } from "@/lib/site";
 import {
   MOBILE_BAR_LINKS,
@@ -19,12 +19,19 @@ import {
 const SHARE_TEXT = `${SITE_PRODUCT_NAME}. Reporta y consulta el estado de las zonas en tiempo real.`;
 
 const MOBILE_NAV_BOTTOM = "calc(3.25rem + env(safe-area-inset-bottom))";
+// Derivado de SECTION_LINKS (única fuente de verdad, ver lib/section-nav.ts):
+// antes esta lista se mantenía a mano en paralelo a SECTION_LINKS, y era fácil
+// añadir una sección nueva al menú móvil sin acordarse de este array — o
+// viceversa. `desktopHeader`/`desktopLabel` en SectionLink cubren el único
+// motivo real para que difiriera (el header de escritorio solo tiene sitio
+// para destinos de primer nivel, y a veces con una etiqueta más corta).
 const DESKTOP_HEADER_LINKS = [
-  { href: "#mapa", label: "Mapa" },
-  { href: "#e-directory", label: "Personas" },
-  { href: "/acopio", label: "Acopio" },
-  { href: "/guia", label: "Guía" },
-] as const;
+  { href: PRIMARY_MAP_LINK.href, label: PRIMARY_MAP_LINK.shortLabel },
+  ...SECTION_LINKS.filter((link) => link.desktopHeader).map((link) => ({
+    href: link.href,
+    label: link.desktopLabel ?? link.shortLabel,
+  })),
+];
 
 function isAnchor(href: string): boolean {
   return href.startsWith("#");
@@ -74,7 +81,7 @@ function useIosScrollLock(active: boolean) {
 }
 
 function usePeopleTotals() {
-  const stats = useMissingStats();
+  const { data: stats } = useMissingStats();
   return { missing: stats?.active ?? null, found: stats?.found ?? null };
 }
 

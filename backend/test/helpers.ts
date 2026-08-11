@@ -47,6 +47,10 @@ export const SYNTHETIC_PNG_DATA_URL =
  */
 const FORBIDDEN_PUBLIC_KEYS = [
   "photo",
+  // El número de microchip de una mascota se guarda pero NO se publica: si
+  // estuviera en el anuncio, cualquiera podría citarlo para "demostrar" que el
+  // animal es suyo. El DTO solo expone `hasMicrochip`. Ver services/pets.ts.
+  "microchip",
   "ip_hash",
   "ipHash",
   "user_agent",

@@ -98,22 +98,33 @@ export async function createRole(input: CreateRoleInput): Promise<RoleDTO> {
   const id = randomUUID();
   const now = Date.now();
 
-  await db.transaction(async (tx) => {
-    await tx.insert(roles).values({
-      id,
-      name: input.name,
-      description: input.description ?? "",
-      isSystem: false, // los roles creados por API nunca son de sistema
-      // createdBy se deja null: el "quién" autoritativo es el audit_log (role.create).
-      createdAt: now,
-      updatedAt: now,
-    });
-    if (input.capabilities.length > 0) {
-      await tx.insert(roleCapabilities).values(
+  // SIN transacción interactiva (falla en el driver HTTP de Neon bajo
+  // Workers). Rol primero, capacidades después; si las capacidades fallan se
+  // COMPENSA borrando el rol para no dejar un rol a medias.
+  await db.insert(roles).values({
+    id,
+    name: input.name,
+    description: input.description ?? "",
+    isSystem: false, // los roles creados por API nunca son de sistema
+    // createdBy se deja null: el "quién" autoritativo es el audit_log (role.create).
+    createdAt: now,
+    updatedAt: now,
+  });
+  if (input.capabilities.length > 0) {
+    try {
+      await db.insert(roleCapabilities).values(
         dedupe(input.capabilities).map((capabilityKey) => ({ roleId: id, capabilityKey })),
       );
+    } catch (err) {
+      try {
+        await db.delete(roles).where(eq(roles.id, id));
+      } catch {
+        // Compensación best-effort: si también falla, el rol queda sin
+        // capacidades y se puede borrar/reintentar desde el panel.
+      }
+      throw err;
     }
-  });
+  }
 
   return toDTO(
     {
@@ -140,23 +151,24 @@ export async function updateRole(id: string, input: UpdateRoleInput): Promise<Ro
   if (input.capabilities) assertKnownCapabilities(input.capabilities);
 
   const now = Date.now();
-  await db.transaction(async (tx) => {
-    const patch: Partial<typeof roles.$inferInsert> = { updatedAt: now };
-    if (input.name !== undefined) patch.name = input.name;
-    if (input.description !== undefined) patch.description = input.description;
-    await tx.update(roles).set(patch).where(eq(roles.id, id));
+  // SIN transacción interactiva (Workers). El reemplazo de capacidades es
+  // idempotente: si un corte deja el rol sin capacidades, re-guardar desde el
+  // panel lo repara (misma operación, mismo resultado).
+  const patch: Partial<typeof roles.$inferInsert> = { updatedAt: now };
+  if (input.name !== undefined) patch.name = input.name;
+  if (input.description !== undefined) patch.description = input.description;
+  await db.update(roles).set(patch).where(eq(roles.id, id));
 
-    if (input.capabilities) {
-      // Reemplazo total de la lista (idempotente y simple).
-      await tx.delete(roleCapabilities).where(eq(roleCapabilities.roleId, id));
-      const caps = dedupe(input.capabilities);
-      if (caps.length > 0) {
-        await tx
-          .insert(roleCapabilities)
-          .values(caps.map((capabilityKey) => ({ roleId: id, capabilityKey })));
-      }
+  if (input.capabilities) {
+    // Reemplazo total de la lista (idempotente y simple).
+    await db.delete(roleCapabilities).where(eq(roleCapabilities.roleId, id));
+    const caps = dedupe(input.capabilities);
+    if (caps.length > 0) {
+      await db
+        .insert(roleCapabilities)
+        .values(caps.map((capabilityKey) => ({ roleId: id, capabilityKey })));
     }
-  });
+  }
 
   return getRoleById(id);
 }
@@ -178,10 +190,11 @@ export async function removeRole(id: string): Promise<boolean> {
     throw badRequest("El rol está asignado a uno o más usuarios. Reasígnalos antes de eliminarlo.");
   }
 
-  await db.transaction(async (tx) => {
-    await tx.delete(roleCapabilities).where(eq(roleCapabilities.roleId, id));
-    await tx.delete(roles).where(eq(roles.id, id));
-  });
+  // SIN transacción interactiva (Workers). Capacidades primero y rol después:
+  // un corte entre ambos deja un rol sin capacidades (inofensivo) y el borrado
+  // se puede reintentar.
+  await db.delete(roleCapabilities).where(eq(roleCapabilities.roleId, id));
+  await db.delete(roles).where(eq(roles.id, id));
   return true;
 }
 

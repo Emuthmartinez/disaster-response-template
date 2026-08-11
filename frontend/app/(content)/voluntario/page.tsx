@@ -10,7 +10,7 @@ export const metadata: Metadata = pageMetadata({
 
 export default function VoluntarioPage() {
   return (
-    <SubPageShell breadcrumb="Inicio">
+    <SubPageShell breadcrumb="Voluntario" path="/voluntario">
       <section className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
         <div className="e-card rounded-[24px] bg-white p-6 sm:p-10">
           <h1 className="mb-2 text-[22px] font-bold text-slate-900 sm:text-2xl">

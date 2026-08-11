@@ -4,7 +4,7 @@
  * HASH de IP (nunca la IP cruda), devuelve solo el id y expone DTOs sin
  * ip_hash en las listas.
  */
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 
 const { dataDeletionRequests } = schema;
@@ -66,4 +66,44 @@ export async function listDeletionRequests(): Promise<DeletionRequestDTO[]> {
     createdAt: Number(r.createdAt),
     updatedAt: Number(r.updatedAt),
   }));
+}
+
+/** Estados válidos de una solicitud de eliminación. */
+export const DELETION_REQUEST_STATUSES = ["pending", "resolved", "rejected"] as const;
+export type DeletionRequestStatus = (typeof DELETION_REQUEST_STATUSES)[number];
+
+/**
+ * Cambia el estado de una solicitud (panel admin). Devuelve el DTO actualizado
+ * o null si no existe. La decisión queda además en audit_log (lo escribe el
+ * router con writeAudit).
+ */
+export async function updateDeletionRequestStatus(
+  id: string,
+  status: DeletionRequestStatus,
+): Promise<DeletionRequestDTO | null> {
+  const db = await getDb();
+  const rows = await db
+    .update(dataDeletionRequests)
+    .set({ status, updatedAt: Date.now() })
+    .where(eq(dataDeletionRequests.id, id))
+    .returning({
+      id: dataDeletionRequests.id,
+      name: dataDeletionRequests.name,
+      email: dataDeletionRequests.email,
+      details: dataDeletionRequests.details,
+      status: dataDeletionRequests.status,
+      createdAt: dataDeletionRequests.createdAt,
+      updatedAt: dataDeletionRequests.updatedAt,
+    });
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    details: row.details,
+    status: row.status,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
 }

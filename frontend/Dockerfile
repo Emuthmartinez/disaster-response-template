@@ -1,4 +1,8 @@
-# Imagen de producción del frontend Next.js (UI). Contexto de build = frontend/.
+# Imagen de producción del frontend Next.js (UI).
+# Contexto de build = RAÍZ del repo (necesita config/deployment.config.json,
+# que frontend/lib/deployment-config.ts importa como "../../config/...", fuera
+# de frontend/ — con contexto ./frontend, COPY nunca puede alcanzarlo).
+#   docker build -f frontend/Dockerfile -t mapa-frontend .
 # Multi-stage: deps -> build (standalone) -> runtime slim no-root.
 # El worker y la API ya NO viven aquí (están en backend/).
 FROM node:24-slim AS base
@@ -6,13 +10,18 @@ WORKDIR /app
 
 # ---- deps: instala con el lockfile (mejor cache de capas) ----
 FROM base AS deps
-COPY package.json package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
 
 # ---- builder: compila el server standalone ----
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY frontend/ ./
+# La identidad del deployment, fuera de frontend/ en el repo real. El import
+# relativo ("../../config/deployment.config.json" desde frontend/lib/) sube
+# dos niveles desde /app/lib -> resuelve a /config/deployment.config.json
+# dentro de la imagen, así que tiene que aterrizar EXACTAMENTE ahí.
+COPY config/deployment.config.json /config/deployment.config.json
 # Build id determinista (anti version-skew, ver next.config.ts). Sin setear -> "dev".
 ARG APP_BUILD_SHA
 ENV APP_BUILD_SHA=$APP_BUILD_SHA
@@ -49,7 +58,16 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
-COPY --from=builder --chown=node:node /app/.next/standalone ./
+# OJO con este path: con este layout de contexto (raíz del repo + algo
+# copiado fuera de /app, ver arriba), el output tracing de Next mete un nivel
+# extra y el standalone queda en .next/standalone/app/ — NO en
+# .next/standalone/ directo como cuando el contexto era solo frontend/.
+# Verifica esto tras cualquier bump de Next: si "node server.js" arranca con
+# MODULE_NOT_FOUND o falta server.js aquí, comprueba si volvió a ser
+# .next/standalone/ sin el /app (build local: revisa la carpeta real bajo
+# .next/standalone/ antes de asumir cuál de las dos rutas es). public/ y
+# .next/static no se ven afectados: siempre quedan junto al build en /app.
+COPY --from=builder --chown=node:node /app/.next/standalone/app ./
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 USER node

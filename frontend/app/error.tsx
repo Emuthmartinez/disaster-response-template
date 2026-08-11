@@ -1,15 +1,59 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { HeroDesktopNav, MobileStickyNav } from "@/components/layout/SectionNav";
 import SiteFooter from "@/components/layout/SiteFooter";
 
+/**
+ * ¿El fallo es "el JS de esta pagina ya no existe"?
+ *
+ * Cada despliegue publica chunks con nombres nuevos. Una pestaña abierta desde
+ * ANTES del despliegue sigue con el HTML viejo, que pide chunks que ya no
+ * estan: el import dinamico da 404 y Next cae aqui. No es un bug de la app —
+ * el usuario solo necesita HTML nuevo.
+ */
+function isStaleChunkError(error: unknown): boolean {
+  const err = error as { name?: string; message?: string } | null;
+  const msg = err ? `${err.name ?? ""} ${err.message ?? ""}` : String(error);
+  return /ChunkLoadError|Loading chunk \d+ failed|Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed/i.test(
+    msg,
+  );
+}
+
+const RELOAD_GUARD_KEY = "e-chunk-reload";
+
 export default function Error({
+  error,
   reset,
 }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  // Recarga automatica UNA sola vez cuando el fallo es de chunk obsoleto. El
+  // guard en sessionStorage evita el bucle si tras recargar sigue fallando
+  // (ahi si es un problema de verdad y conviene mostrar el error).
+  useEffect(() => {
+    if (!isStaleChunkError(error)) return;
+    try {
+      if (sessionStorage.getItem(RELOAD_GUARD_KEY)) return;
+      sessionStorage.setItem(RELOAD_GUARD_KEY, "1");
+    } catch {
+      return; // sin sessionStorage no arriesgamos un bucle de recargas
+    }
+    window.location.reload();
+  }, [error]);
+
+  // Al renderizar bien, limpiamos el guard para que la proxima vez pueda actuar.
+  useEffect(() => {
+    if (isStaleChunkError(error)) return;
+    try {
+      sessionStorage.removeItem(RELOAD_GUARD_KEY);
+    } catch {
+      /* sin storage, nada que limpiar */
+    }
+  }, [error]);
+
   return (
     <>
       <HeroDesktopNav />
