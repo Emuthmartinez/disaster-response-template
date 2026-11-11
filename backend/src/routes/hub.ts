@@ -20,9 +20,7 @@ const STATS_CACHE = {
 
 const reportsQuery = z.object({
   type: z.enum(["missing_person", "checkin", "help_request", "help_offer", "damaged_building"], {
-    errorMap: () => ({
-      message: `type requerido y debe ser uno de: ${service.HUB_TYPES.join(", ")}`,
-    }),
+    error: `type requerido y debe ser uno de: ${service.HUB_TYPES.join(", ")}`,
   }),
   limit: z.coerce.number().int().min(1).max(service.MAX_LIMIT).default(100),
 });

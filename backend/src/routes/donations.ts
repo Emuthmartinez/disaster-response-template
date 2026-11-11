@@ -30,7 +30,7 @@ const createBody = z.object({
     .min(1, "El nombre debe tener entre 1 y 40 caracteres.")
     .max(40, "El nombre debe tener entre 1 y 40 caracteres."),
   amountCents: z.coerce
-    .number({ invalid_type_error: "El monto debe ser un número entero en centavos." })
+    .number({ error: "El monto debe ser un número entero en centavos." })
     .int("El monto debe ser un número entero en centavos.")
     .min(
       service.MIN_DONATION_CENTS,

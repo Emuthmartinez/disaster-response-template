@@ -3,12 +3,12 @@
  * SMTP_HOST configurado, `sendInvitationEmail` devuelve {sent:false} y el caller
  * expone el link en la respuesta (flujo dev). En prod con SMTP, manda el correo.
  */
-import nodemailer from "nodemailer";
+import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "@/config/env";
 
-let _transport: nodemailer.Transporter | null = null;
+let _transport: Transporter | null = null;
 
-function transport(): nodemailer.Transporter | null {
+function transport(): Transporter | null {
   if (!env.SMTP_HOST) return null;
   if (_transport) return _transport;
   _transport = nodemailer.createTransport({
