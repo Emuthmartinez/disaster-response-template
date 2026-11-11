@@ -33,7 +33,7 @@ const LIST_CACHE = {
 // --- Esquemas zod (validación de entrada; reemplaza el parseo manual) ---
 const createBody = z.object({
   type: z.enum(service.REPORT_TYPE_KEYS as [string, ...string[]], {
-    errorMap: () => ({ message: "Selecciona el tipo de marcador." }),
+    error: "Selecciona el tipo de marcador.",
   }),
   lat: z.coerce.number().finite().min(-90).max(90),
   lng: z.coerce.number().finite().min(-180).max(180),
